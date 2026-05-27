@@ -622,17 +622,101 @@ async function convertToInvoice(id) {
     allJobs = await apiFetch('/jobs'); viewJob(id);
 }
 
-async function sendChatMessage() {
-    const msg = userInput.value.trim(); if (!msg) return;
-    addChatMessage(msg, 'user'); userInput.value = '';
-    const res = await apiFetch('/chat', { method: 'POST', body: JSON.stringify({ message: msg, jobId: activeJobId, history: conversationHistory }) });
-    conversationHistory = res.history;
-    addChatMessage(res.message, 'assistant');
+let selectedChatImage = null;
+
+function previewChatImage(input) {
+    if (input.files && input.files[0]) {
+        selectedChatImage = input.files[0];
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            document.getElementById('chatPreviewImg').src = e.target.result;
+            document.getElementById('chatImagePreview').classList.remove('d-none');
+        };
+        reader.readAsDataURL(selectedChatImage);
+    }
 }
 
-function addChatMessage(text, role) {
-    const div = document.createElement('div'); div.className = `${role}-msg mb-3 p-3 rounded shadow-sm`;
-    div.innerText = text; chatWindow.appendChild(div); chatWindow.scrollTop = chatWindow.scrollHeight;
+function clearChatImage() {
+    selectedChatImage = null;
+    document.getElementById('chatImageInput').value = '';
+    document.getElementById('chatImagePreview').classList.add('d-none');
+    document.getElementById('chatPreviewImg').src = '';
+}
+
+async function sendChatMessage() {
+    const msg = userInput.value.trim();
+    if (!msg && !selectedChatImage) return;
+
+    let imageKey = null;
+    let imageFormat = null;
+    
+    if (selectedChatImage) {
+        addChatMessage(msg || "Processing receipt...", 'user', true);
+        const file = selectedChatImage;
+        const format = file.type.split('/')[1] === 'jpeg' ? 'jpg' : file.type.split('/')[1];
+        
+        try {
+            showToast('Upload', 'Uploading receipt to S3...');
+            // 1. Get presigned upload URL
+            const { uploadUrl, key } = await apiFetch(`/jobs/${activeJobId}/files/upload-url?fileName=${encodeURIComponent(file.name)}&fileType=${encodeURIComponent(file.type)}`);
+            
+            // 2. Direct upload to S3
+            const s3Response = await fetch(uploadUrl, {
+                method: 'PUT',
+                body: file,
+                headers: { 'Content-Type': file.type }
+            });
+            
+            if (!s3Response.ok) throw new Error('S3 Upload Failed');
+            
+            // Auto-archive in job files
+            await apiFetch(`/jobs/${activeJobId}/files`, { 
+                method: 'POST', 
+                body: JSON.stringify({ name: file.name, tag: 'Other', key: key }) 
+            });
+            
+            imageKey = key;
+            imageFormat = format;
+            clearChatImage();
+        } catch (err) {
+            console.error('Chat image upload error:', err);
+            showToast('Error', 'Failed to upload receipt image');
+            return;
+        }
+    } else {
+        addChatMessage(msg, 'user');
+    }
+
+    userInput.value = '';
+
+    try {
+        const res = await apiFetch('/chat', { 
+            method: 'POST', 
+            body: JSON.stringify({ 
+                message: msg, 
+                jobId: activeJobId, 
+                history: conversationHistory,
+                imageKey: imageKey,
+                imageFormat: imageFormat
+            }) 
+        });
+        conversationHistory = res.history;
+        addChatMessage(res.message, 'assistant');
+    } catch (err) {
+        showToast('Error', 'Failed to send message');
+    }
+}
+
+function addChatMessage(text, role, isImage = false) {
+    const div = document.createElement('div');
+    div.className = `${role}-msg mb-3 p-3 rounded shadow-sm`;
+    if (isImage) {
+        div.innerHTML = `<div>${text}</div><div class="mt-2 small text-muted"><i class="fas fa-image me-1"></i> Image attached</div>`;
+    } else {
+        div.innerText = text;
+    }
+    chatWindow.appendChild(div);
+    chatWindow.scrollTop = chatWindow.scrollHeight;
 }
 
 async function loadSettings() {

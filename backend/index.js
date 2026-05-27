@@ -37,118 +37,93 @@ const tools = [
     toolSpec: {
       name: "get_labor_costs",
       description: "Get average labor pricing for a specific trade or job type.",
-      inputSchema: {
-        json: {
-          type: "object",
-          properties: {
-            trade: { type: "string", description: "The construction trade (e.g., carpenter, electrician)." },
-            location: { type: "string", description: "City and State." }
-          },
-          required: ["trade"]
-        }
-      }
+      inputSchema: { json: { type: "object", properties: { trade: { type: "string" }, location: { type: "string" } }, required: ["trade"] } }
     }
   },
   {
     toolSpec: {
       name: "search_lowes_materials",
       description: "Search for construction materials and prices at Lowe's.",
-      inputSchema: {
-        json: {
-          type: "object",
-          properties: {
-            query: { type: "string", description: "The material to search for (e.g., 2x4x8 treated lumber)." }
-          },
-          required: ["query"]
-        }
-      }
+      inputSchema: { json: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } }
     }
   },
   {
     toolSpec: {
       name: "create_job",
-      description: "Create a new job with a title, date, optional end date, and optional customer name.",
-      inputSchema: {
-        json: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            date: { type: "string", description: "YYYY-MM-DD" },
-            endDate: { type: "string", description: "YYYY-MM-DD (optional end date to accommodate spans of time)" },
-            customerName: { type: "string" }
-          },
-          required: ["title", "date"]
-        }
-      }
+      description: "Create a new job.",
+      inputSchema: { json: { type: "object", properties: { title: { type: "string" }, date: { type: "string", description: "YYYY-MM-DD" }, endDate: { type: "string" }, customerName: { type: "string" }, paymentTerms: { type: "string" } }, required: ["title", "date"] } }
+    }
+  },
+  {
+    toolSpec: {
+      name: "update_job_details",
+      description: "Update existing job details.",
+      inputSchema: { json: { type: "object", properties: { jobId: { type: "string" }, title: { type: "string" }, date: { type: "string" }, endDate: { type: "string" }, customerName: { type: "string" }, paymentTerms: { type: "string" } }, required: ["jobId"] } }
+    }
+  },
+  {
+    toolSpec: {
+      name: "advance_job_status",
+      description: "Move a job to its next logical status (ESTIMATE -> APPROVED -> IN PROGRESS -> INVOICED -> PAID).",
+      inputSchema: { json: { type: "object", properties: { jobId: { type: "string" } }, required: ["jobId"] } }
     }
   },
   {
     toolSpec: {
       name: "query_job_details",
-      description: "Retrieve details about a specific job, including todos and invoice line items.",
-      inputSchema: {
-        json: {
-          type: "object",
-          properties: {
-            jobId: { type: "string", description: "The ID of the job to query." }
-          },
-          required: ["jobId"]
-        }
-      }
+      description: "Retrieve details about a job (lines, expenses, visits, etc).",
+      inputSchema: { json: { type: "object", properties: { jobId: { type: "string" } }, required: ["jobId"] } }
     }
   },
   {
     toolSpec: {
       name: "add_invoice_line_item",
-      description: "Add a line item to a job's estimate/invoice.",
-      inputSchema: {
-        json: {
-          type: "object",
-          properties: {
-            jobId: { type: "string" },
-            description: { type: "string" },
-            type: { type: "string", enum: ["labor", "material"] },
-            cost: { type: "number" },
-            quantity: { type: "number" }
-          },
-          required: ["jobId", "description", "type", "cost", "quantity"]
-        }
-      }
+      description: "Add a cost item to an estimate/invoice.",
+      inputSchema: { json: { type: "object", properties: { jobId: { type: "string" }, description: { type: "string" }, type: { type: "string", enum: ["labor", "material"] }, cost: { type: "number" }, quantity: { type: "number" } }, required: ["jobId", "description", "type", "cost", "quantity"] } }
     }
   },
   {
     toolSpec: {
       name: "log_actual_expense",
-      description: "Log an actual expense incurred against a job.",
-      inputSchema: {
-        json: {
-          type: "object",
-          properties: {
-            jobId: { type: "string" },
-            description: { type: "string" },
-            cost: { type: "number" },
-            quantity: { type: "number" }
-          },
-          required: ["jobId", "description", "cost", "quantity"]
-        }
-      }
+      description: "Log a real expense incurred.",
+      inputSchema: { json: { type: "object", properties: { jobId: { type: "string" }, description: { type: "string" }, cost: { type: "number" }, quantity: { type: "number" } }, required: ["jobId", "description", "cost", "quantity"] } }
+    }
+  },
+  {
+    toolSpec: {
+      name: "schedule_site_visit",
+      description: "Schedule a site visit for a job.",
+      inputSchema: { json: { type: "object", properties: { jobId: { type: "string" }, startDateTime: { type: "string", description: "ISO 8601" }, endDateTime: { type: "string" }, notes: { type: "string" } }, required: ["jobId", "startDateTime", "endDateTime"] } }
     }
   },
   {
     toolSpec: {
       name: "create_customer",
       description: "Create a new customer record.",
-      inputSchema: {
-        json: {
-          type: "object",
-          properties: {
-            name: { type: "string" },
-            email: { type: "string" },
-            phone: { type: "string" }
-          },
-          required: ["name"]
-        }
+      inputSchema: { json: { type: "object", properties: { name: { type: "string" }, email: { type: "string" }, phone: { type: "string" }, address: { type: "string" } }, required: ["name"] } }
+    }
+  },
+  {
+    toolSpec: {
+      name: "log_expense_from_receipt",
+      description: "Extract expense details from a receipt image and log it to the job.",
+      inputSchema: { 
+        json: { 
+          type: "object", 
+          properties: { 
+            jobId: { type: "string" }, 
+            imageKey: { type: "string", description: "The S3 key of the receipt image uploaded to chat." } 
+          }, 
+          required: ["jobId", "imageKey"] 
+        } 
       }
+    }
+  },
+  {
+    toolSpec: {
+      name: "update_company_settings",
+      description: "Update company name or invoice notes.",
+      inputSchema: { json: { type: "object", properties: { companyName: { type: "string" }, invoiceNotes: { type: "string" } } } }
     }
   }
 ];
@@ -166,7 +141,7 @@ async function handleToolUse(userId, toolUse, jobId) {
   const input = toolUse.input;
   
   // Force jobId context
-  input.jobId = input.jobId || jobId;
+  const targetJobId = input.jobId || jobId;
   console.log(`Tool: ${name}, Input: ${JSON.stringify(input)}`);
 
   if (name === "create_job") {
@@ -178,6 +153,7 @@ async function handleToolUse(userId, toolUse, jobId) {
       date: input.date, 
       endDate: input.endDate || null, 
       customerName: input.customerName || null, 
+      paymentTerms: input.paymentTerms || null,
       status: 'ESTIMATE', 
       createdAt: new Date().toISOString() 
     };
@@ -186,26 +162,168 @@ async function handleToolUse(userId, toolUse, jobId) {
     return `Job "${input.title}" created. ID: ${newJobId}`;
   }
 
-  if (name === "query_job_details") {
-    const targetJobId = input.jobId || jobId;
-    if (!targetJobId) return "Error: No job context provided.";
+  if (name === "update_job_details") {
+    if (!targetJobId) return "Error: No jobId provided.";
+    const oldJob = await docClient.send(new GetCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: `JOB#${targetJobId}` } }));
+    if (!oldJob.Item) return "Error: Job not found.";
+
+    const updates = [];
+    if (input.title) updates.push(`title changed to "${input.title}"`);
+    if (input.date) updates.push(`date changed to "${input.date}"`);
+    if (input.endDate) updates.push(`end date changed to "${input.endDate}"`);
+    if (input.customerName) updates.push(`customer changed to "${input.customerName}"`);
+    if (input.paymentTerms) updates.push(`payment terms changed to "${input.paymentTerms}"`);
+
+    await docClient.send(new UpdateCommand({
+        TableName: DATA_TABLE,
+        Key: { PK: userId, SK: `JOB#${targetJobId}` },
+        UpdateExpression: "SET title = :t, #d = :d, endDate = :e, customerName = :c, paymentTerms = :p",
+        ExpressionAttributeNames: { "#d": "date" },
+        ExpressionAttributeValues: { 
+            ":t": input.title || oldJob.Item.title, 
+            ":d": input.date || oldJob.Item.date, 
+            ":e": input.endDate || oldJob.Item.endDate || null, 
+            ":c": input.customerName || oldJob.Item.customerName || null,
+            ":p": input.paymentTerms || oldJob.Item.paymentTerms || null
+        }
+    }));
+    await logJobHistory(targetJobId, "UPDATED", `Job updated via AI: ${updates.join(", ")}`);
+    return `Job ${targetJobId} updated successfully.`;
+  }
+
+  if (name === "advance_job_status") {
+    if (!targetJobId) return "Error: No jobId provided.";
+    const job = await docClient.send(new GetCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: `JOB#${targetJobId}` } }));
+    if (!job.Item) return "Error: Job not found.";
     
+    const statuses = ['ESTIMATE', 'APPROVED', 'IN PROGRESS', 'INVOICED', 'PAID'];
+    const currentIndex = statuses.indexOf(job.Item.status);
+    if (currentIndex === -1 || currentIndex === statuses.length - 1) return `Status "${job.Item.status}" cannot be advanced further.`;
+    
+    const nextStatus = statuses[currentIndex + 1];
+    const updateExpression = nextStatus === 'APPROVED' ? "SET #s = :s, approvalDate = :ad" : "SET #s = :s";
+    const attrValues = nextStatus === 'APPROVED' ? { ":s": nextStatus, ":ad": new Date().toISOString() } : { ":s": nextStatus };
+
+    await docClient.send(new UpdateCommand({
+        TableName: DATA_TABLE,
+        Key: { PK: userId, SK: `JOB#${targetJobId}` },
+        UpdateExpression: updateExpression,
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: attrValues
+    }));
+    await logJobHistory(targetJobId, "STATUS_CHANGE", `Status advanced to ${nextStatus} via AI.`);
+    return `Job status advanced to ${nextStatus}.`;
+  }
+
+  if (name === "query_job_details") {
+    if (!targetJobId) return "Error: No job context provided.";
     const result = await docClient.send(new QueryCommand({
       TableName: DATA_TABLE,
       KeyConditionExpression: "PK = :pk AND begins_with(SK, :sk)",
       ExpressionAttributeValues: { ":pk": userId, ":sk": `JOB#${targetJobId}` }
     }));
-    
     return JSON.stringify(result.Items);
+  }
+
+  if (name === "add_invoice_line_item") {
+    if (!targetJobId) return "Error: No job context provided.";
+    const itemId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+    await docClient.send(new PutCommand({
+      TableName: DATA_TABLE,
+      Item: { PK: userId, SK: `JOB#${targetJobId}#LINE#${itemId}`, description: input.description, type: input.type, cost: input.cost, quantity: input.quantity }
+    }));
+    await logJobHistory(targetJobId, "LINE_ITEM_ADDED", `Added ${input.type} "${input.description}" (${input.quantity}x @ $${input.cost}) via AI.`);
+    return `Added line item to job ${targetJobId}.`;
+  }
+
+  if (name === "log_expense_from_receipt") {
+    if (!targetJobId) return "Error: No jobId provided.";
+    if (!input.imageKey) return "Error: No imageKey provided.";
+
+    try {
+        // 1. Fetch image from S3
+        const getObj = await s3Client.send(new GetObjectCommand({
+            Bucket: FILES_BUCKET,
+            Key: input.imageKey
+        }));
+        const bodyContents = await getObj.Body.transformToByteArray();
+        
+        // 2. Call Bedrock (Nova Lite) to extract expense data
+        const extractionPrompt = "Extract expense details from this receipt image. Return JSON: { \"description\": string, \"cost\": number, \"quantity\": number }. If quantity isn't clear, use 1. Only return the JSON.";
+        const command = new ConverseCommand({
+            modelId: "amazon.nova-lite-v1:0",
+            messages: [{
+                role: "user",
+                content: [
+                    { text: extractionPrompt },
+                    { image: { format: input.imageKey.split('.').pop().toLowerCase() === 'png' ? 'png' : 'jpeg', source: { bytes: bodyContents } } }
+                ]
+            }]
+        });
+        const result = await bedrockClient.send(command);
+        const text = result.output.message.content[0].text;
+        const data = JSON.parse(text.match(/\{.*\}/s)[0]);
+
+        // 3. Log expense
+        const expenseId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+        await docClient.send(new PutCommand({
+            TableName: DATA_TABLE,
+            Item: {
+                PK: userId,
+                SK: `JOB#${targetJobId}#EXPENSE#${expenseId}`,
+                description: data.description,
+                cost: data.cost,
+                quantity: data.quantity,
+                timestamp: new Date().toISOString(),
+                receiptKey: input.imageKey
+            }
+        }));
+
+        // 4. Archive file to job files list
+        await docClient.send(new PutCommand({
+            TableName: DATA_TABLE,
+            Item: {
+                PK: userId,
+                SK: `JOB#${targetJobId}#FILE#${Date.now()}`,
+                name: `Receipt_${data.description.replace(/\s+/g, '_')}.jpg`,
+                key: input.imageKey,
+                tag: 'Receipt',
+                timestamp: new Date().toISOString()
+            }
+        }));
+
+        await logJobHistory(targetJobId, "EXPENSE_LOGGED", `Processed receipt image: Logged "${data.description}" ($${data.cost} x ${data.quantity})`);
+        return `Successfully processed receipt and logged expense: "${data.description}" for $${data.cost}.`;
+    } catch (err) {
+        console.error("Receipt processing error:", err);
+        return "Error: Failed to process receipt image. " + err.message;
+    }
+  }
+
+  if (name === "schedule_site_visit") {
+    if (!targetJobId) return "Error: No job context provided.";
+    const visitId = Date.now().toString();
+    await docClient.send(new PutCommand({
+      TableName: DATA_TABLE,
+      Item: { PK: userId, SK: `JOB#${targetJobId}#VISIT#${visitId}`, id: visitId, startDateTime: input.startDateTime, endDateTime: input.endDateTime, notes: input.notes || "", createdAt: new Date().toISOString() }
+    }));
+    await logJobHistory(targetJobId, "VISIT_ADDED", `Scheduled visit via AI: ${input.startDateTime} to ${input.endDateTime}.`);
+    return `Site visit scheduled for job ${targetJobId}.`;
   }
 
   if (name === "create_customer") {
     const cid = Date.now().toString();
     await docClient.send(new PutCommand({
       TableName: DATA_TABLE,
-      Item: { PK: userId, SK: `CUSTOMER#${cid}`, name: input.name, email: input.email, phone: input.phone }
+      Item: { PK: userId, SK: `CUSTOMER#${cid}`, name: input.name, email: input.email || null, phone: input.phone || null, address: input.address || null, id: cid }
     }));
-    return `Customer "${input.name}" created.`;
+    return `Customer "${input.name}" created successfully.`;
+  }
+
+  if (name === "update_company_settings") {
+    if (input.companyName) await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: { PK: userId, SK: "SETTING#COMPANY_NAME", value: input.companyName } }));
+    if (input.invoiceNotes) await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: { PK: userId, SK: "SETTING#INVOICE_NOTES", value: input.invoiceNotes } }));
+    return "Company settings updated successfully.";
   }
 
   if (name === "get_labor_costs") {
@@ -217,42 +335,6 @@ async function handleToolUse(userId, toolUse, jobId) {
 
   if (name === "search_lowes_materials") {
     return `Found: ${input.query}. Price: $29.99 (Simulated)`;
-  }
-
-  if (name === "add_invoice_line_item") {
-    const targetJobId = input.jobId || jobId;
-    if (!targetJobId) return "Error: No job context provided.";
-    
-    const itemId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
-    const item = {
-      PK: userId,
-      SK: `JOB#${targetJobId}#LINE#${itemId}`,
-      description: input.description,
-      type: input.type,
-      cost: input.cost,
-      quantity: input.quantity
-    };
-    await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: item }));
-    await logJobHistory(targetJobId, "LINE_ITEM_ADDED", `Added item "${input.description}" (${input.quantity}x @ $${input.cost}) via AI Assistant.`);
-    return `Added line item: "${input.description}" (${input.quantity}x @ $${input.cost}) to job ID: ${targetJobId}.`;
-  }
-
-  if (name === "log_actual_expense") {
-    const targetJobId = input.jobId || jobId;
-    if (!targetJobId) return "Error: No job context provided.";
-    
-    const expenseId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
-    const expenseItem = {
-      PK: userId,
-      SK: `JOB#${targetJobId}#EXPENSE#${expenseId}`,
-      description: input.description,
-      cost: input.cost,
-      quantity: input.quantity,
-      timestamp: new Date().toISOString()
-    };
-    await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: expenseItem }));
-    await logJobHistory(targetJobId, "EXPENSE_LOGGED", `Logged expense "${input.description}" ($${input.cost} x ${input.quantity}) via AI Assistant.`);
-    return `Logged expense: "${input.description}" ($${input.cost} x ${input.quantity}) to job ID: ${targetJobId}.`;
   }
 
   return "Tool not implemented.";
@@ -489,11 +571,11 @@ exports.handler = async (event) => {
                 SK: `JOB#${jobId}#FILE#${Date.now()}`,
                 name: body.name,
                 key: body.key,
-                tag: body.tag,
+                tag: body.tag || 'Other',
                 timestamp: new Date().toISOString()
             };
             await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: fileItem }));
-            await logJobHistory(jobId, "FILE_UPLOADED", `Uploaded file: ${body.name} (${body.tag})`);
+            await logJobHistory(jobId, "FILE_UPLOADED", `Uploaded file: ${body.name} (${body.tag || 'Other'})`);
             return response(201, { message: "File recorded" });
         }
         if (path.match(/\/jobs\/.*\/items\/.*$/) && method === "DELETE") {
@@ -544,28 +626,52 @@ exports.handler = async (event) => {
 
     // Chat
     if (path === "/chat" && method === "POST") {
-      let messages = body.history || [{ role: "user", content: [{ text: body.message }] }];
-      if (body.history) messages.push({ role: "user", content: [{ text: body.message }] });
-      let system = [{text:"You are a handyman project management helper. Use 'add_invoice_line_item' tool to add costs to a job estimate, and 'log_actual_expense' to log real expenses incurred against a job."}];
+      let messages = body.history || [];
+      
+      const userContent = [{ text: body.message || "Please process this image." }];
+      if (body.imageKey) {
+        const getObj = await s3Client.send(new GetObjectCommand({
+            Bucket: FILES_BUCKET,
+            Key: body.imageKey
+        }));
+        const bytes = await getObj.Body.transformToByteArray();
+        userContent.push({
+            image: {
+                format: body.imageFormat === 'png' ? 'png' : 'jpeg',
+                source: { bytes: bytes }
+            }
+        });
+      }
+      
+      messages.push({ role: "user", content: userContent });
+
+      let system = [{text:"You are a professional handyman project management assistant. If a user uploads an image of a receipt, use the 'log_expense_from_receipt' tool to extract the details and log it. You can also manage jobs, customers, site visits, and estimates using other tools. Always ask for clarification if needed."}];
       if(body.jobId) system.push({text:"You are currently in the context of job ID: "+body.jobId+". Always pass this jobId to tool calls."});
+      
       let finalMessage = "";
       for (let i = 0; i < 3; i++) {
-        const command = new ConverseCommand({ modelId: "amazon.nova-lite-v1:0", messages: messages, system:system, toolConfig: { tools } });
-        const result = await bedrockClient.send(command);
-        const outputMessage = result.output.message;
-        messages.push(outputMessage);
-        if (result.stopReason === "tool_use") {
-          const toolResults = [];
-          for (const content of outputMessage.content) {
-            if (content.toolUse) {
-              const toolOutput = await handleToolUse(userId, content.toolUse, body.jobId);
-              toolResults.push({ toolResult: { toolUseId: content.toolUse.toolUseId, content: [{ text: toolOutput }] } });
+        try {
+            const command = new ConverseCommand({ modelId: "amazon.nova-lite-v1:0", messages: messages, system:system, toolConfig: { tools } });
+            const result = await bedrockClient.send(command);
+            const outputMessage = result.output.message;
+            messages.push(outputMessage);
+            
+            if (result.stopReason === "tool_use") {
+              const toolResults = [];
+              for (const content of outputMessage.content) {
+                if (content.toolUse) {
+                  const toolOutput = await handleToolUse(userId, content.toolUse, body.jobId);
+                  toolResults.push({ toolResult: { toolUseId: content.toolUse.toolUseId, content: [{ text: toolOutput }] } });
+                }
+              }
+              messages.push({ role: "user", content: toolResults });
+            } else {
+              finalMessage = outputMessage.content.find(c => c.text)?.text || "Done.";
+              break;
             }
-          }
-          messages.push({ role: "user", content: toolResults });
-        } else {
-          finalMessage = outputMessage.content.find(c => c.text)?.text || "Done.";
-          break;
+        } catch (err) {
+            console.error("Bedrock Converse error:", err);
+            throw err;
         }
       }
       return response(200, { message: finalMessage, history: messages });

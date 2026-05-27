@@ -199,9 +199,17 @@
                 <div class="card border-0 shadow-sm h-100">
                     <div id="chatWindow" class="card-body overflow-auto bg-light p-4" style="height: 60vh;"></div>
                     <div class="card-footer bg-white p-3">
-                        <div class="input-group">
-                            <input type="text" id="userInput" class="form-control border-0 bg-light" placeholder="e.g. 'Add 5 hours of labor to my deck job at $50/hr'">
+                        <div class="input-group mb-2">
+                            <button class="btn btn-outline-secondary border-0 bg-light" onclick="document.getElementById('chatImageInput').click()"><i class="fas fa-camera"></i></button>
+                            <input type="file" id="chatImageInput" class="d-none" accept="image/*" onchange="previewChatImage(this)">
+                            <input type="text" id="userInput" class="form-control border-0 bg-light" placeholder="Type a message or upload a receipt...">
                             <button id="sendBtn" class="btn btn-primary px-4">Send</button>
+                        </div>
+                        <div id="chatImagePreview" class="d-none">
+                            <div class="position-relative d-inline-block">
+                                <img src="" id="chatPreviewImg" class="img-thumbnail" style="max-height: 100px;">
+                                <button class="btn btn-sm btn-danger position-absolute top-0 end-0 m-1 p-0 px-1" onclick="clearChatImage()">&times;</button>
+                            </div>
                         </div>
                     </div>
                 </div>
