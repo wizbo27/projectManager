@@ -30,3 +30,87 @@
 
 .transition-transform { transition: transform 0.2s ease; }
 .collapsed .transition-transform { transform: rotate(-90deg); }
+
+/* --- FullCalendar Premium Custom Styling --- */
+#jobsCalendar {
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.fc {
+    --fc-border-color: #eef1f6 !important;
+    --fc-button-bg-color: #0d6efd !important;
+    --fc-button-border-color: #0d6efd !important;
+    --fc-button-hover-bg-color: #0b5ed7 !important;
+    --fc-button-hover-border-color: #0a58ca !important;
+    --fc-button-active-bg-color: #0a58ca !important;
+    --fc-button-active-border-color: #0a53be !important;
+    --fc-today-bg-color: rgba(13, 110, 253, 0.04) !important;
+}
+
+.fc .fc-toolbar {
+    margin-bottom: 1.5rem !important;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.fc .fc-toolbar-title {
+    font-size: 1.35rem !important;
+    font-weight: 700 !important;
+    color: #2b303a;
+    letter-spacing: -0.02em;
+}
+
+.fc .fc-col-header-cell {
+    background-color: #f8f9fa;
+    padding: 10px 0 !important;
+    font-weight: 600 !important;
+    color: #495057;
+    border-bottom: 2px solid #dee2e6 !important;
+}
+
+.fc-event {
+    border-radius: 6px !important;
+    padding: 3px 6px !important;
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.04) !important;
+    border: none !important;
+    cursor: pointer;
+    transition: all 0.2s ease-in-out !important;
+}
+
+.fc-event:hover {
+    transform: translateY(-1px) scale(1.01);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.08) !important;
+    filter: brightness(0.95);
+}
+
+.fc-daygrid-event-dot {
+    display: none !important;
+}
+
+.fc-daygrid-day-number {
+    font-weight: 600;
+    color: #495057;
+    text-decoration: none !important;
+    padding: 8px !important;
+}
+
+.fc-daygrid-day.fc-day-today {
+    background-color: rgba(13, 110, 253, 0.05) !important;
+}
+
+/* Site visits aesthetics */
+#visitList .list-group-item {
+    border-bottom: 1px dashed rgba(0, 0, 0, 0.08);
+    transition: background-color 0.2s;
+}
+
+#visitList .list-group-item:hover {
+    background-color: rgba(13, 110, 253, 0.02);
+}
+
+#visitList .list-group-item:last-child {
+    border-bottom: none;
+}

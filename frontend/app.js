@@ -3,6 +3,8 @@ const COGNITO_DATA = { UserPoolId: 'us-east-1_rxiAtDAaX', ClientId: '3jmiu7s9bhn
 const userPool = new AmazonCognitoIdentity.CognitoUserPool(COGNITO_DATA);
 
 let currentSession = null, allJobs = [], allCustomers = [], activeJobId = null, conversationHistory = [];
+let activeJobsView = 'list';
+let calendar = null;
 
 // --- DOM elements setup ---
 const authView = document.getElementById('authView'), appView = document.getElementById('appView'), chatWindow = document.getElementById('chatWindow'), userInput = document.getElementById('userInput');
@@ -185,19 +187,27 @@ async function loadJobs() {
             </div>
         </div>
     `).join('') : '<div class="text-center w-100 py-5 text-muted">No jobs yet.</div>';
+    
+    if (activeJobsView === 'calendar') {
+        initCalendar();
+    }
 }
 
 function showNewJobModal() { 
     document.getElementById('newJobTitle').value = '';
     document.getElementById('newJobDate').value = new Date().toISOString().split('T')[0];
+    document.getElementById('newJobEndDate').value = '';
     loadCustomers(); 
     new bootstrap.Modal(document.getElementById('newJobModal')).show(); 
 }
 
 async function createNewJob() {
-    const title = document.getElementById('newJobTitle').value, date = document.getElementById('newJobDate').value, customerName = document.getElementById('jobCustomerInput').value;
+    const title = document.getElementById('newJobTitle').value;
+    const date = document.getElementById('newJobDate').value;
+    const endDate = document.getElementById('newJobEndDate').value;
+    const customerName = document.getElementById('jobCustomerInput').value;
     if (!title || !date) return alert('Please fill in title and date');
-    await apiFetch('/jobs', { method: 'POST', body: JSON.stringify({ title, date, customerName }) });
+    await apiFetch('/jobs', { method: 'POST', body: JSON.stringify({ title, date, endDate, customerName }) });
     bootstrap.Modal.getInstance(document.getElementById('newJobModal')).hide(); loadJobs();
 }
 
@@ -208,6 +218,7 @@ function editJob(id) {
     document.getElementById('editJobId').value = id;
     document.getElementById('editJobTitle').value = job.title;
     document.getElementById('editJobDate').value = job.date;
+    document.getElementById('editJobEndDate').value = job.endDate || '';
     document.getElementById('editJobCustomerInput').value = job.customerName || '';
     
     new bootstrap.Modal(document.getElementById('editJobModal')).show();
@@ -218,6 +229,7 @@ async function submitJobUpdate() {
     const body = {
         title: document.getElementById('editJobTitle').value,
         date: document.getElementById('editJobDate').value,
+        endDate: document.getElementById('editJobEndDate').value,
         customerName: document.getElementById('editJobCustomerInput').value
     };
     try {
@@ -394,6 +406,7 @@ function viewJob(id) {
         </div>`;
     
     renderLineItems();
+    renderVisitsList(job);
     
     const total = job.lines.reduce((sum, l) => sum + (l.cost * l.quantity), 0);
     const statuses = ['ESTIMATE', 'APPROVED', 'IN PROGRESS', 'INVOICED', 'PAID'];
@@ -516,3 +529,193 @@ window.onload = () => {
     const user = userPool.getCurrentUser();
     if (user) { user.getSession((err, session) => { if (session?.isValid()) { currentSession = session; authView.classList.add('d-none'); appView.classList.remove('d-none'); showView('menu'); } }); }
 };
+
+function switchJobsView(view) {
+    activeJobsView = view;
+    const btnList = document.getElementById('btnListView');
+    const btnCal = document.getElementById('btnCalendarView');
+    const listDiv = document.getElementById('jobsList');
+    const calDiv = document.getElementById('calendarContainer');
+    
+    if (view === 'list') {
+        btnList.classList.add('active');
+        btnCal.classList.remove('active');
+        listDiv.classList.remove('d-none');
+        calDiv.classList.add('d-none');
+    } else {
+        btnList.classList.remove('active');
+        btnCal.classList.add('active');
+        listDiv.classList.add('d-none');
+        calDiv.classList.remove('d-none');
+        initCalendar();
+    }
+}
+
+function initCalendar() {
+    const calendarEl = document.getElementById('jobsCalendar');
+    if (!calendarEl) return;
+    
+    if (calendar) {
+        calendar.destroy();
+    }
+    
+    const events = [];
+    
+    allJobs.forEach(job => {
+        // Skip jobs with no valid start date
+        if (!job.date) return;
+
+        let startStr = job.date;
+        // Use endDate if set and non-empty, otherwise fall back to startDate
+        let endStr = (job.endDate && job.endDate.trim()) ? job.endDate : job.date;
+
+        // Add 1 day to end date to make it inclusive in FullCalendar allDay view
+        let endDateObj = new Date(endStr + 'T00:00:00');
+        if (isNaN(endDateObj.getTime())) {
+            endDateObj = new Date(startStr + 'T00:00:00');
+        }
+        endDateObj.setDate(endDateObj.getDate() + 1);
+        let calEndStr = endDateObj.toISOString().split('T')[0];
+
+        events.push({
+            id: job.id,
+            title: (job.title || 'Untitled') + (job.customerName ? ` (${job.customerName})` : ''),
+            start: startStr,
+            end: calEndStr,
+            allDay: true,
+            color: getStatusColor(job.status),
+            extendedProps: {
+                status: job.status,
+                customer: job.customerName
+            }
+        });
+
+        // Site visit events for this job
+        if (job.visits && Array.isArray(job.visits)) {
+            job.visits.forEach(visit => {
+                // Skip visits with missing or invalid datetimes
+                if (!visit.startDateTime || !visit.endDateTime) return;
+                const visitStart = new Date(visit.startDateTime);
+                const visitEnd = new Date(visit.endDateTime);
+                if (isNaN(visitStart.getTime()) || isNaN(visitEnd.getTime())) return;
+
+                events.push({
+                    id: `visit-${visit.id}`,
+                    title: `📌 Visit: ${job.title || 'Job'} ${visit.notes ? `(${visit.notes})` : ''}`,
+                    start: visit.startDateTime,
+                    end: visit.endDateTime,
+                    color: '#6f42c1', // Purple for site visits
+                    extendedProps: {
+                        isVisit: true,
+                        jobId: job.id,
+                        notes: visit.notes
+                    }
+                });
+            });
+        }
+    });
+
+    calendar = new FullCalendar.Calendar(calendarEl, {
+        initialView: 'dayGridMonth',
+        headerToolbar: {
+            left: 'prev,next today',
+            center: 'title',
+            right: 'dayGridMonth,timeGridWeek,timeGridDay'
+        },
+        events: events,
+        eventClick: function(info) {
+            if (info.event.extendedProps.isVisit) {
+                viewJob(info.event.extendedProps.jobId);
+            } else {
+                viewJob(info.event.id);
+            }
+        },
+        themeSystem: 'bootstrap5'
+    });
+    calendar.render();
+}
+
+function getStatusColor(status) {
+    const colors = {
+        'ESTIMATE': '#ffc107',
+        'APPROVED': '#0dcaf0',
+        'IN PROGRESS': '#0d6efd',
+        'INVOICED': '#198754',
+        'PAID': '#212529'
+    };
+    return colors[status] || '#6c757d';
+}
+
+function showNewVisitModal() {
+    document.getElementById('visitStart').value = '';
+    document.getElementById('visitEnd').value = '';
+    document.getElementById('visitNotes').value = '';
+    new bootstrap.Modal(document.getElementById('newVisitModal')).show();
+}
+
+async function createNewVisit() {
+    const startDateTime = document.getElementById('visitStart').value;
+    const endDateTime = document.getElementById('visitEnd').value;
+    const notes = document.getElementById('visitNotes').value;
+    
+    if (!startDateTime || !endDateTime) {
+        return alert('Please enter both start and end date and time');
+    }
+    
+    if (new Date(startDateTime) >= new Date(endDateTime)) {
+        return alert('Start time must be before end time');
+    }
+    
+    try {
+        await apiFetch(`/jobs/${activeJobId}/visits`, {
+            method: 'POST',
+            body: JSON.stringify({ startDateTime, endDateTime, notes })
+        });
+        bootstrap.Modal.getInstance(document.getElementById('newVisitModal')).hide();
+        await loadJobs();
+        viewJob(activeJobId);
+        showToast('Success', 'Site visit scheduled successfully');
+    } catch (err) {
+        showToast('Error', 'Failed to schedule site visit');
+    }
+}
+
+async function deleteVisit(visitId) {
+    if (!confirm('Are you sure you want to delete this site visit?')) return;
+    try {
+        await apiFetch(`/jobs/${activeJobId}/visits/${visitId}`, { method: 'DELETE' });
+        await loadJobs();
+        viewJob(activeJobId);
+        showToast('Success', 'Site visit deleted');
+    } catch (err) {
+        showToast('Error', 'Failed to delete site visit');
+    }
+}
+
+function renderVisitsList(job) {
+    const visitList = document.getElementById('visitList');
+    if (!visitList) return;
+    
+    const visits = job.visits || [];
+    if (visits.length === 0) {
+        visitList.innerHTML = '<div class="text-center py-4 text-muted small"><i class="far fa-calendar-times me-2"></i>No scheduled visits.</div>';
+        return;
+    }
+    
+    // Sort visits by start time
+    visits.sort((a, b) => new Date(a.startDateTime) - new Date(b.startDateTime));
+    
+    visitList.innerHTML = visits.map(v => {
+        const start = new Date(v.startDateTime).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+        const end = new Date(v.endDateTime).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+        return `
+            <div class="list-group-item px-0 py-2 d-flex justify-content-between align-items-start bg-transparent">
+                <div class="flex-grow-1">
+                    <div class="fw-bold text-dark small"><i class="far fa-clock me-1 text-info"></i> ${start} - ${end}</div>
+                    ${v.notes ? `<div class="text-muted small mt-1 bg-light p-2 rounded border-start border-info border-3" style="font-size: 0.8rem; white-space: pre-wrap;">${v.notes}</div>` : ''}
+                </div>
+                <button class="btn btn-link text-danger btn-sm p-0 ms-2" onclick="deleteVisit('${v.id}')"><i class="fas fa-trash-alt"></i></button>
+            </div>
+        `;
+    }).join('');
+}

@@ -63,13 +63,14 @@ const tools = [
   {
     toolSpec: {
       name: "create_job",
-      description: "Create a new job with a title, date, and optional customer name.",
+      description: "Create a new job with a title, date, optional end date, and optional customer name.",
       inputSchema: {
         json: {
           type: "object",
           properties: {
             title: { type: "string" },
             date: { type: "string", description: "YYYY-MM-DD" },
+            endDate: { type: "string", description: "YYYY-MM-DD (optional end date to accommodate spans of time)" },
             customerName: { type: "string" }
           },
           required: ["title", "date"]
@@ -148,7 +149,16 @@ async function handleToolUse(userId, toolUse, jobId) {
 
   if (name === "create_job") {
     const newJobId = Date.now().toString();
-    const item = { PK: userId, SK: `JOB#${newJobId}`, title: input.title, date: input.date, customerName: input.customerName || null, status: 'ESTIMATE', createdAt: new Date().toISOString() };
+    const item = { 
+      PK: userId, 
+      SK: `JOB#${newJobId}`, 
+      title: input.title, 
+      date: input.date, 
+      endDate: input.endDate || null, 
+      customerName: input.customerName || null, 
+      status: 'ESTIMATE', 
+      createdAt: new Date().toISOString() 
+    };
     await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: item }));
     await logJobHistory(newJobId, "CREATED", `Job "${input.title}" created via AI Assistant.`);
     return `Job "${input.title}" created. ID: ${newJobId}`;
@@ -302,16 +312,29 @@ exports.handler = async (event) => {
         result.Items.forEach(item => {
           const parts = item.SK.split("#");
           const jobId = parts[1];
-          if (!jobs[jobId]) jobs[jobId] = { id: jobId, lines: [], todos: [] };
+          if (!jobs[jobId]) jobs[jobId] = { id: jobId, lines: [], todos: [], visits: [] };
           if (parts.length === 2) Object.assign(jobs[jobId], item);
           else if (parts[2] === "LINE") jobs[jobId].lines.push(item);
           else if (parts[2] === "TODO") jobs[jobId].todos.push(item);
+          else if (parts[2] === "VISIT") {
+            if (!jobs[jobId].visits) jobs[jobId].visits = [];
+            jobs[jobId].visits.push(item);
+          }
         });
         return response(200, Object.values(jobs));
       }
       if (method === "POST") {
         const jobId = Date.now().toString();
-        const item = { PK: userId, SK: `JOB#${jobId}`, title: body.title, date: body.date, customerName: body.customerName || null, status: 'ESTIMATE', createdAt: new Date().toISOString() };
+        const item = { 
+          PK: userId, 
+          SK: `JOB#${jobId}`, 
+          title: body.title, 
+          date: body.date, 
+          endDate: body.endDate || null, 
+          customerName: body.customerName || null, 
+          status: 'ESTIMATE', 
+          createdAt: new Date().toISOString() 
+        };
         await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: item }));
         await logJobHistory(jobId, "CREATED", `Job "${body.title}" created.`);
         return response(201, { id: jobId });
@@ -359,15 +382,16 @@ exports.handler = async (event) => {
             await docClient.send(new UpdateCommand({
                 TableName: DATA_TABLE,
                 Key: { PK: userId, SK: `JOB#${jobId}` },
-                UpdateExpression: "SET title = :t, #d = :d, customerName = :c",
+                UpdateExpression: "SET title = :t, #d = :d, endDate = :e, customerName = :c",
                 ExpressionAttributeNames: { "#d": "date" },
-                ExpressionAttributeValues: { ":t": body.title, ":d": body.date, ":c": body.customerName || null }
+                ExpressionAttributeValues: { ":t": body.title, ":d": body.date, ":e": body.endDate || null, ":c": body.customerName || null }
             }));
 
             const changes = [];
             if (oldJob.Item) {
                 if (oldJob.Item.title !== body.title) changes.push(`title changed from "${oldJob.Item.title}" to "${body.title}"`);
                 if (oldJob.Item.date !== body.date) changes.push(`date changed from "${oldJob.Item.date}" to "${body.date}"`);
+                if (oldJob.Item.endDate !== body.endDate) changes.push(`end date changed from "${oldJob.Item.endDate || 'None'}" to "${body.endDate || 'None'}"`);
                 const oldCust = oldJob.Item.customerName || "None";
                 const newCust = body.customerName || "None";
                 if (oldCust !== newCust) changes.push(`customer changed from "${oldCust}" to "${newCust}"`);
@@ -436,6 +460,39 @@ exports.handler = async (event) => {
                 ScanIndexForward: false
             }));
             return response(200, result.Items || []);
+        }
+        if (path.endsWith("/visits") && method === "POST") {
+            const visitId = Date.now().toString();
+            const visitItem = {
+                PK: userId,
+                SK: `JOB#${jobId}#VISIT#${visitId}`,
+                id: visitId,
+                startDateTime: body.startDateTime,
+                endDateTime: body.endDateTime,
+                notes: body.notes || "",
+                createdAt: new Date().toISOString()
+            };
+            await docClient.send(new PutCommand({
+                TableName: DATA_TABLE,
+                Item: visitItem
+            }));
+            await logJobHistory(jobId, "VISIT_ADDED", `Scheduled site visit: ${body.startDateTime} to ${body.endDateTime}.`);
+            return response(201, { id: visitId });
+        }
+        if (path.match(/\/jobs\/.*\/visits\/.*$/) && method === "DELETE") {
+            const visitId = path.split("/").pop();
+            const existingVisit = await docClient.send(new GetCommand({
+                TableName: DATA_TABLE,
+                Key: { PK: userId, SK: `JOB#${jobId}#VISIT#${visitId}` }
+            }));
+            const visitNotes = existingVisit.Item ? existingVisit.Item.notes : 'Site Visit';
+
+            await docClient.send(new DeleteCommand({
+                TableName: DATA_TABLE,
+                Key: { PK: userId, SK: `JOB#${jobId}#VISIT#${visitId}` }
+            }));
+            await logJobHistory(jobId, "VISIT_DELETED", `Deleted site visit: ${visitNotes}`);
+            return response(200, { message: "Visit deleted" });
         }
     }
 

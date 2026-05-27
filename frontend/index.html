@@ -7,6 +7,8 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="style.css">
+    <!-- FullCalendar v6 CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
 </head>
 <body class="bg-light">
 
@@ -60,9 +62,18 @@
             <div id="menuContent" class="view-content">
                 <div class="d-flex justify-content-between align-items-center mb-4">
                     <h2>Construction Jobs</h2>
-                    <button class="btn btn-primary" onclick="showNewJobModal()"><i class="fas fa-plus me-2"></i>New Job</button>
+                    <div class="d-flex gap-2">
+                        <div class="btn-group" role="group" aria-label="Jobs view toggle">
+                            <button id="btnListView" type="button" class="btn btn-outline-primary active" onclick="switchJobsView('list')"><i class="fas fa-list me-1"></i>List</button>
+                            <button id="btnCalendarView" type="button" class="btn btn-outline-primary" onclick="switchJobsView('calendar')"><i class="fas fa-calendar-alt me-1"></i>Calendar</button>
+                        </div>
+                        <button class="btn btn-primary" onclick="showNewJobModal()"><i class="fas fa-plus me-2"></i>New Job</button>
+                    </div>
                 </div>
                 <div id="jobsList" class="row g-4"></div>
+                <div id="calendarContainer" class="d-none bg-white p-4 rounded shadow-sm">
+                    <div id="jobsCalendar"></div>
+                </div>
             </div>
 
             <!-- Job Detail View -->
@@ -119,6 +130,18 @@
                             <div class="card-header bg-white py-3"><h5 class="mb-0 text-warning">Status & Actions</h5></div>
                             <div class="card-body" id="jobStatusInfo"></div>
                         </div>
+                        <!-- Site Visits Card -->
+                        <div class="card border-0 shadow-sm mb-4">
+                            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                                <h5 class="mb-0 text-info"><i class="fas fa-map-marker-alt me-2"></i>Site Visits</h5>
+                                <button class="btn btn-sm btn-outline-info" onclick="showNewVisitModal()"><i class="fas fa-plus"></i> Add Visit</button>
+                            </div>
+                            <div class="card-body">
+                                <div id="visitList" class="list-group list-group-flush py-0">
+                                    <!-- Dynamic site visits will be rendered here -->
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -162,7 +185,10 @@
         <form id="newJobForm" onsubmit="event.preventDefault(); createNewJob();">
             <div class="modal-body">
                 <div class="mb-3"><label class="form-label">Job Title</label><input type="text" id="newJobTitle" class="form-control" placeholder="e.g. Kitchen Remodel" required></div>
-                <div class="mb-3"><label class="form-label">Date</label><input type="date" id="newJobDate" class="form-control" required></div>
+                <div class="row">
+                    <div class="col-6 mb-3"><label class="form-label">Start Date</label><input type="date" id="newJobDate" class="form-control" required></div>
+                    <div class="col-6 mb-3"><label class="form-label">End Date (Optional)</label><input type="date" id="newJobEndDate" class="form-control"></div>
+                </div>
                 <div class="mb-3">
                     <label class="form-label">Customer</label>
                     <div class="position-relative">
@@ -180,7 +206,10 @@
         <div class="modal-body">
             <input type="hidden" id="editJobId">
             <div class="mb-3"><label class="form-label">Job Title</label><input type="text" id="editJobTitle" class="form-control"></div>
-            <div class="mb-3"><label class="form-label">Date</label><input type="date" id="editJobDate" class="form-control"></div>
+            <div class="row">
+                <div class="col-6 mb-3"><label class="form-label">Start Date</label><input type="date" id="editJobDate" class="form-control"></div>
+                <div class="col-6 mb-3"><label class="form-label">End Date (Optional)</label><input type="date" id="editJobEndDate" class="form-control"></div>
+            </div>
             <div class="mb-3">
                 <label class="form-label">Customer</label>
                 <div class="position-relative">
@@ -224,6 +253,18 @@
             <label class="btn btn-outline-info me-auto"><input type="file" id="importContact" class="d-none" accept=".vcf,.csv">Import Contact</label>
             <button type="button" class="btn btn-primary" onclick="createCustomer()">Save</button>
         </div>
+    </div></div></div>
+
+    <div class="modal fade" id="newVisitModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">New Site Visit</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <form id="newVisitForm" onsubmit="event.preventDefault(); createNewVisit();">
+            <div class="modal-body">
+                <div class="mb-3"><label class="form-label">Start Date & Time</label><input type="datetime-local" id="visitStart" class="form-control" required></div>
+                <div class="mb-3"><label class="form-label">End Date & Time</label><input type="datetime-local" id="visitEnd" class="form-control" required></div>
+                <div class="mb-3"><label class="form-label">Notes / Comments</label><textarea id="visitNotes" class="form-control" rows="3" placeholder="e.g. Initial measurement, client walk-through..."></textarea></div>
+            </div>
+            <div class="modal-footer"><button type="submit" class="btn btn-primary">Schedule Visit</button></div>
+        </form>
     </div></div></div>
 
     <div class="toast-container position-fixed bottom-0 end-0 p-3">
