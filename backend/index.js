@@ -238,15 +238,10 @@ async function handleToolUse(userId, toolUse, jobId) {
 
   if (name === "log_expense_from_receipt") {
     if (!targetJobId) return "Error: No jobId provided.";
-    if (!input.imageKey) return "Error: No imageKey provided.";
+    if (!input.base64Image) return "Error: No image provided.";
 
     try {
-        // 1. Fetch image from S3
-        const getObj = await s3Client.send(new GetObjectCommand({
-            Bucket: FILES_BUCKET,
-            Key: input.imageKey
-        }));
-        const bodyContents = await getObj.Body.transformToByteArray();
+        const buffer = Buffer.from(input.base64Image, 'base64');
         
         // 2. Call Bedrock (Nova Lite) to extract expense data
         const extractionPrompt = "Extract expense details from this receipt image. Return JSON: { \"description\": string, \"cost\": number, \"quantity\": number }. If quantity isn't clear, use 1. Only return the JSON.";
@@ -256,7 +251,7 @@ async function handleToolUse(userId, toolUse, jobId) {
                 role: "user",
                 content: [
                     { text: extractionPrompt },
-                    { image: { format: input.imageKey.split('.').pop().toLowerCase() === 'png' ? 'png' : 'jpeg', source: { bytes: bodyContents } } }
+                    { image: { format: input.format === 'png' ? 'png' : 'jpeg', source: { bytes: buffer } } }
                 ]
             }]
         });
@@ -274,25 +269,11 @@ async function handleToolUse(userId, toolUse, jobId) {
                 description: data.description,
                 cost: data.cost,
                 quantity: data.quantity,
-                timestamp: new Date().toISOString(),
-                receiptKey: input.imageKey
-            }
-        }));
-
-        // 4. Archive file to job files list
-        await docClient.send(new PutCommand({
-            TableName: DATA_TABLE,
-            Item: {
-                PK: userId,
-                SK: `JOB#${targetJobId}#FILE#${Date.now()}`,
-                name: `Receipt_${data.description.replace(/\s+/g, '_')}.jpg`,
-                key: input.imageKey,
-                tag: 'Receipt',
                 timestamp: new Date().toISOString()
             }
         }));
 
-        await logJobHistory(targetJobId, "EXPENSE_LOGGED", `Processed receipt image: Logged "${data.description}" ($${data.cost} x ${data.quantity})`);
+        await logJobHistory(targetJobId, "EXPENSE_LOGGED", `Processed receipt: Logged "${data.description}" ($${data.cost} x ${data.quantity})`);
         return `Successfully processed receipt and logged expense: "${data.description}" for $${data.cost}.`;
     } catch (err) {
         console.error("Receipt processing error:", err);
@@ -629,16 +610,11 @@ exports.handler = async (event) => {
       let messages = body.history || [];
       
       const userContent = [{ text: body.message || "Please process this image." }];
-      if (body.imageKey) {
-        const getObj = await s3Client.send(new GetObjectCommand({
-            Bucket: FILES_BUCKET,
-            Key: body.imageKey
-        }));
-        const bytes = await getObj.Body.transformToByteArray();
+      if (body.image) {
         userContent.push({
             image: {
-                format: body.imageFormat === 'png' ? 'png' : 'jpeg',
-                source: { bytes: bytes }
+                format: body.image.format === 'png' ? 'png' : 'jpeg',
+                source: { bytes: Buffer.from(body.image.base64, 'base64') }
             }
         });
       }

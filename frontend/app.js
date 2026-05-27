@@ -647,42 +647,20 @@ async function sendChatMessage() {
     const msg = userInput.value.trim();
     if (!msg && !selectedChatImage) return;
 
-    let imageKey = null;
-    let imageFormat = null;
+    let imagePayload = null;
     
     if (selectedChatImage) {
         addChatMessage(msg || "Processing receipt...", 'user', true);
-        const file = selectedChatImage;
-        const format = file.type.split('/')[1] === 'jpeg' ? 'jpg' : file.type.split('/')[1];
-        
-        try {
-            showToast('Upload', 'Uploading receipt to S3...');
-            // 1. Get presigned upload URL
-            const { uploadUrl, key } = await apiFetch(`/jobs/${activeJobId}/files/upload-url?fileName=${encodeURIComponent(file.name)}&fileType=${encodeURIComponent(file.type)}`);
-            
-            // 2. Direct upload to S3
-            const s3Response = await fetch(uploadUrl, {
-                method: 'PUT',
-                body: file,
-                headers: { 'Content-Type': file.type }
+        const reader = new FileReader();
+        imagePayload = await new Promise((resolve) => {
+            reader.onload = (e) => resolve({
+                base64: e.target.result.split(',')[1],
+                format: selectedChatImage.type.split('/')[1] === 'jpeg' ? 'jpg' : selectedChatImage.type.split('/')[1],
+                name: selectedChatImage.name
             });
-            
-            if (!s3Response.ok) throw new Error('S3 Upload Failed');
-            
-            // Auto-archive in job files
-            await apiFetch(`/jobs/${activeJobId}/files`, { 
-                method: 'POST', 
-                body: JSON.stringify({ name: file.name, tag: 'Other', key: key }) 
-            });
-            
-            imageKey = key;
-            imageFormat = format;
-            clearChatImage();
-        } catch (err) {
-            console.error('Chat image upload error:', err);
-            showToast('Error', 'Failed to upload receipt image');
-            return;
-        }
+            reader.readAsDataURL(selectedChatImage);
+        });
+        clearChatImage();
     } else {
         addChatMessage(msg, 'user');
     }
@@ -696,14 +674,14 @@ async function sendChatMessage() {
                 message: msg, 
                 jobId: activeJobId, 
                 history: conversationHistory,
-                imageKey: imageKey,
-                imageFormat: imageFormat
+                image: imagePayload 
             }) 
         });
         conversationHistory = res.history;
         addChatMessage(res.message, 'assistant');
     } catch (err) {
-        showToast('Error', 'Failed to send message');
+        console.error('Chat error:', err);
+        showToast('Error', 'Failed to send message: ' + err.message);
     }
 }
 
