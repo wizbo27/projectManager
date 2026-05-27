@@ -288,35 +288,17 @@ exports.handler = async (event) => {
     if (path === "/customers") {
         if (method === "GET") {
             const query = event.queryStringParameters?.q;
-            const scanParams = {
-                TableName: DATA_TABLE,
-                FilterExpression: "begins_with(SK, :sk)",
-                ExpressionAttributeValues: { ":sk": "CUSTOMER#" }
-            };
-
-            if (query) {
-                scanParams.FilterExpression += " AND contains(#n, :q)";
-                scanParams.ExpressionAttributeNames = { "#n": "name" };
-                scanParams.ExpressionAttributeValues[":q"] = query;
-            }
-
             const result = await docClient.send(new QueryCommand({
                 TableName: DATA_TABLE,
                 KeyConditionExpression: "PK = :pk AND begins_with(SK, :sk)",
                 ExpressionAttributeValues: { ":pk": userId, ":sk": "CUSTOMER#" }
             }));
-            
-            // If searching, we might need a Scan if we can't use Query effectively on non-key attributes, 
-            // but since we are already filtering by PK (userId) and SK (CUSTOMER#), 
-            // we can just filter the result of the Query in memory or use a FilterExpression in the Query.
-            
             let items = result.Items || [];
             if (query) {
                 items = items.filter(item => item.name && item.name.toLowerCase().includes(query.toLowerCase()));
             }
             return response(200, items);
         }
-
         if (method === "POST" || method === "PATCH") {
             const cid = body.id || Date.now().toString();
             await docClient.send(new PutCommand({
@@ -335,7 +317,6 @@ exports.handler = async (event) => {
             }));
             const hasJobs = jobs.Items.some(j => j.customerName === customer.Item?.name);
             if (hasJobs) return response(400, { message: "Cannot delete: Customer has associated jobs." });
-            
             await docClient.send(new DeleteCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: `CUSTOMER#${cid}` } }));
             return response(200, { message: "Customer deleted" });
         }
@@ -383,6 +364,7 @@ exports.handler = async (event) => {
           date: body.date, 
           endDate: body.endDate || null, 
           customerName: body.customerName || null, 
+          paymentTerms: body.paymentTerms || null,
           status: 'ESTIMATE', 
           createdAt: new Date().toISOString() 
         };
@@ -393,26 +375,38 @@ exports.handler = async (event) => {
     }
     
     if (path.startsWith("/jobs/")) {
-        const jobId = path.split("/")[2];
+        const pathParts = path.split("/");
+        const jobId = pathParts[2];
+        
+        if (path.endsWith("/files/upload-url") && method === "GET") {
+            const fileName = event.queryStringParameters?.fileName;
+            const fileType = event.queryStringParameters?.fileType;
+            const isBranding = event.queryStringParameters?.branding === "true";
+            if (!fileName) return response(400, { message: "fileName is required" });
+            
+            const key = isBranding 
+                ? `branding/${userId}/${Date.now()}_${fileName}`
+                : `uploads/${userId}/${jobId}/${Date.now()}_${fileName}`;
+                
+            const uploadUrl = await getSignedUrl(s3Client, new PutObjectCommand({
+                Bucket: FILES_BUCKET,
+                Key: key,
+                ContentType: fileType || 'application/octet-stream'
+            }), { expiresIn: 300 });
+            
+            return response(200, { uploadUrl, key });
+        }
+
         if (path.endsWith("/status") && method === "PATCH") {
             const { status } = body;
             const validStatuses = ['ESTIMATE', 'APPROVED', 'IN PROGRESS', 'INVOICED', 'PAID'];
-            if (!validStatuses.includes(status)) {
-                return response(400, { message: "Invalid status value" });
-            }
+            if (!validStatuses.includes(status)) return response(400, { message: "Invalid status value" });
             
-            const oldJob = await docClient.send(new GetCommand({
-                TableName: DATA_TABLE,
-                Key: { PK: userId, SK: `JOB#${jobId}` }
-            }));
+            const oldJob = await docClient.send(new GetCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: `JOB#${jobId}` } }));
             const oldStatus = oldJob.Item ? oldJob.Item.status : 'UNKNOWN';
 
-            const updateExpression = status === 'APPROVED' 
-                ? "SET #s = :s, approvalDate = :ad" 
-                : "SET #s = :s";
-            const expressionAttributeValues = status === 'APPROVED'
-                ? { ":s": status, ":ad": new Date().toISOString() }
-                : { ":s": status };
+            const updateExpression = status === 'APPROVED' ? "SET #s = :s, approvalDate = :ad" : "SET #s = :s";
+            const expressionAttributeValues = status === 'APPROVED' ? { ":s": status, ":ad": new Date().toISOString() } : { ":s": status };
 
             await docClient.send(new UpdateCommand({
                 TableName: DATA_TABLE,
@@ -424,20 +418,16 @@ exports.handler = async (event) => {
             await logJobHistory(jobId, "STATUS_CHANGE", `Status updated from ${oldStatus} to ${status}`);
             return response(200, { message: `Status updated to ${status}` });
         }
+        
         if (method === "PATCH") {
-            const oldJob = await docClient.send(new GetCommand({
-                TableName: DATA_TABLE,
-                Key: { PK: userId, SK: `JOB#${jobId}` }
-            }));
-
+            const oldJob = await docClient.send(new GetCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: `JOB#${jobId}` } }));
             await docClient.send(new UpdateCommand({
                 TableName: DATA_TABLE,
                 Key: { PK: userId, SK: `JOB#${jobId}` },
-                UpdateExpression: "SET title = :t, #d = :d, endDate = :e, customerName = :c",
+                UpdateExpression: "SET title = :t, #d = :d, endDate = :e, customerName = :c, paymentTerms = :p",
                 ExpressionAttributeNames: { "#d": "date" },
-                ExpressionAttributeValues: { ":t": body.title, ":d": body.date, ":e": body.endDate || null, ":c": body.customerName || null }
+                ExpressionAttributeValues: { ":t": body.title, ":d": body.date, ":e": body.endDate || null, ":c": body.customerName || null, ":p": body.paymentTerms || null }
             }));
-
             const changes = [];
             if (oldJob.Item) {
                 if (oldJob.Item.title !== body.title) changes.push(`title changed from "${oldJob.Item.title}" to "${body.title}"`);
@@ -446,53 +436,43 @@ exports.handler = async (event) => {
                 const oldCust = oldJob.Item.customerName || "None";
                 const newCust = body.customerName || "None";
                 if (oldCust !== newCust) changes.push(`customer changed from "${oldCust}" to "${newCust}"`);
+                const oldTerms = oldJob.Item.paymentTerms || "None";
+                const newTerms = body.paymentTerms || "None";
+                if (oldTerms !== newTerms) changes.push(`payment terms changed from "${oldTerms}" to "${newTerms}"`);
             }
             const changeDesc = changes.length > 0 ? `Job details updated: ${changes.join(", ")}` : "Job details saved.";
             await logJobHistory(jobId, "UPDATED", changeDesc);
-
             return response(200, { message: "Job updated" });
         }
         if (path.endsWith("/items/bulk") && method === "POST") {
             const lines = body.lines || [];
-            // 1. Delete existing line items for this job
             const existingItems = await docClient.send(new QueryCommand({
                 TableName: DATA_TABLE,
                 KeyConditionExpression: "PK = :pk AND begins_with(SK, :sk)",
                 ExpressionAttributeValues: { ":pk": userId, ":sk": `JOB#${jobId}#LINE` }
             }));
             const oldTotal = (existingItems.Items || []).reduce((sum, l) => sum + (l.cost * l.quantity), 0);
-            
             for (const item of (existingItems.Items || [])) {
                 await docClient.send(new DeleteCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: item.SK } }));
             }
-            
-            // 2. Add new updated lines
             for (const line of lines) {
                 const itemId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
-                await docClient.send(new PutCommand({
-                    TableName: DATA_TABLE,
-                    Item: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}`, ...line }
-                }));
+                await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}`, ...line } }));
             }
-            
             const newTotal = lines.reduce((sum, l) => sum + (l.cost * l.quantity), 0);
             await logJobHistory(jobId, "LINE_ITEMS_BULK_UPDATE", `Bulk updated line items. Total changed from $${oldTotal.toFixed(2)} to $${newTotal.toFixed(2)} (${lines.length} items total)`);
             return response(200, { message: "Bulk update successful" });
         }
         if (path.endsWith("/expenses/bulk") && method === "POST") {
             const expenses = body.expenses || [];
-            // 1. Delete existing expenses for this job
             const existingExpenses = await docClient.send(new QueryCommand({
                 TableName: DATA_TABLE,
                 KeyConditionExpression: "PK = :pk AND begins_with(SK, :sk)",
                 ExpressionAttributeValues: { ":pk": userId, ":sk": `JOB#${jobId}#EXPENSE` }
             }));
-            
             for (const item of (existingExpenses.Items || [])) {
                 await docClient.send(new DeleteCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: item.SK } }));
             }
-            
-            // 2. Add new updated expenses
             for (const exp of expenses) {
                 const expenseId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
                 await docClient.send(new PutCommand({
@@ -500,42 +480,8 @@ exports.handler = async (event) => {
                     Item: { PK: userId, SK: `JOB#${jobId}#EXPENSE#${expenseId}`, description: exp.description, cost: exp.cost, quantity: exp.quantity, timestamp: exp.timestamp || new Date().toISOString() }
                 }));
             }
-            
             await logJobHistory(jobId, "EXPENSES_BULK_UPDATE", `Bulk updated ${expenses.length} expense items.`);
             return response(200, { message: "Bulk expense update successful" });
-        }
-        if (path.endsWith("/files/upload-url") && method === "GET") {
-            const fileName = event.queryStringParameters?.fileName;
-            const fileType = event.queryStringParameters?.fileType;
-            if (!fileName) return response(400, { message: "fileName is required" });
-            
-            const key = `uploads/${userId}/${jobId}/${Date.now()}_${fileName}`;
-            const uploadUrl = await getSignedUrl(s3Client, new PutObjectCommand({
-                Bucket: FILES_BUCKET,
-                Key: key,
-                ContentType: fileType || 'application/octet-stream'
-            }), { expiresIn: 300 });
-            
-            return response(200, { uploadUrl, key });
-        }
-        if (path.endsWith("/pdf") && method === "POST") {
-            const fileName = `Invoice_${jobId}_${Date.now()}.pdf`;
-            const key = `generated/${userId}/${jobId}/${fileName}`;
-            // In a real app, you'd actually generate and upload the PDF to S3 here.
-            // For now, we record the key that will eventually hold the PDF.
-            await docClient.send(new PutCommand({
-                TableName: DATA_TABLE,
-                Item: {
-                    PK: userId,
-                    SK: `JOB#${jobId}#FILE#${Date.now()}`,
-                    name: fileName,
-                    key: key,
-                    tag: 'Generated',
-                    timestamp: new Date().toISOString()
-                }
-            }));
-            await logJobHistory(jobId, "FILE_CREATED", `Generated PDF invoice: ${fileName}`);
-            return response(201, { message: "PDF generated" });
         }
         if (path.endsWith("/files") && method === "POST") {
             const fileItem = {
@@ -552,115 +498,68 @@ exports.handler = async (event) => {
         }
         if (path.match(/\/jobs\/.*\/items\/.*$/) && method === "DELETE") {
             const itemId = path.split("/").pop();
-            const existingItem = await docClient.send(new GetCommand({
-                TableName: DATA_TABLE,
-                Key: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}` }
-            }));
+            const existingItem = await docClient.send(new GetCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}` } }));
             const itemDesc = existingItem.Item ? existingItem.Item.description : 'Unknown Item';
-
-            await docClient.send(new DeleteCommand({
-                TableName: DATA_TABLE,
-                Key: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}` }
-            }));
+            await docClient.send(new DeleteCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}` } }));
             await logJobHistory(jobId, "LINE_ITEM_DELETED", `Deleted item "${itemDesc}"`);
             return response(200, { message: "Item deleted" });
         }
         if (path.endsWith("/items") && method === "POST") {
             const itemId = Date.now().toString();
-            await docClient.send(new PutCommand({
-                TableName: DATA_TABLE,
-                Item: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}`, ...body }
-            }));
+            await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}`, ...body } }));
             await logJobHistory(jobId, "LINE_ITEM_ADDED", `Added item "${body.description}" (${body.quantity}x @ $${body.cost})`);
             return response(201, { id: itemId });
         }
         if (path.endsWith("/history") && method === "GET") {
-            const result = await docClient.send(new QueryCommand({
-                TableName: HISTORY_TABLE,
-                KeyConditionExpression: "JobId = :jobId",
-                ExpressionAttributeValues: { ":jobId": jobId },
-                ScanIndexForward: false
-            }));
+            const result = await docClient.send(new QueryCommand({ TableName: HISTORY_TABLE, KeyConditionExpression: "JobId = :jobId", ExpressionAttributeValues: { ":jobId": jobId }, ScanIndexForward: false }));
             return response(200, result.Items || []);
         }
         if (path.endsWith("/visits") && method === "POST") {
             const visitId = Date.now().toString();
-            const visitItem = {
-                PK: userId,
-                SK: `JOB#${jobId}#VISIT#${visitId}`,
-                id: visitId,
-                startDateTime: body.startDateTime,
-                endDateTime: body.endDateTime,
-                notes: body.notes || "",
-                createdAt: new Date().toISOString()
-            };
-            await docClient.send(new PutCommand({
-                TableName: DATA_TABLE,
-                Item: visitItem
-            }));
+            const visitItem = { PK: userId, SK: `JOB#${jobId}#VISIT#${visitId}`, id: visitId, startDateTime: body.startDateTime, endDateTime: body.endDateTime, notes: body.notes || "", createdAt: new Date().toISOString() };
+            await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: visitItem }));
             await logJobHistory(jobId, "VISIT_ADDED", `Scheduled site visit: ${body.startDateTime} to ${body.endDateTime}.`);
             return response(201, { id: visitId });
         }
         if (path.match(/\/jobs\/.*\/files\/.*$/) && method === "DELETE") {
             const fileSkPart = path.split("/").pop();
             const sk = `JOB#${jobId}#FILE#${fileSkPart}`;
-            
-            // 1. Get file details to get S3 key
-            const fileItem = await docClient.send(new GetCommand({
-                TableName: DATA_TABLE,
-                Key: { PK: userId, SK: sk }
-            }));
-            
+            const fileItem = await docClient.send(new GetCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: sk } }));
             if (fileItem.Item && fileItem.Item.key) {
-                // 2. Delete from S3
-                await s3Client.send(new DeleteObjectCommand({
-                    Bucket: FILES_BUCKET,
-                    Key: fileItem.Item.key
-                }));
+                await s3Client.send(new DeleteObjectCommand({ Bucket: FILES_BUCKET, Key: fileItem.Item.key }));
             }
-            
-            // 3. Delete from DynamoDB
-            await docClient.send(new DeleteCommand({
-                TableName: DATA_TABLE,
-                Key: { PK: userId, SK: sk }
-            }));
-            
+            await docClient.send(new DeleteCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: sk } }));
             await logJobHistory(jobId, "FILE_DELETED", `Deleted file: ${fileItem.Item ? fileItem.Item.name : 'Unknown'}`);
             return response(200, { message: "File deleted" });
+        }
+        if (path.match(/\/jobs\/.*\/visits\/.*$/) && method === "DELETE") {
+            const visitId = path.split("/").pop();
+            const existingVisit = await docClient.send(new GetCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: `JOB#${jobId}#VISIT#${visitId}` } }));
+            const visitNotes = existingVisit.Item ? existingVisit.Item.notes : 'Site Visit';
+            await docClient.send(new DeleteCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: `JOB#${jobId}#VISIT#${visitId}` } }));
+            await logJobHistory(jobId, "VISIT_DELETED", `Deleted site visit: ${visitNotes}`);
+            return response(200, { message: "Visit deleted" });
         }
     }
 
     // Chat
     if (path === "/chat" && method === "POST") {
       let messages = body.history || [{ role: "user", content: [{ text: body.message }] }];
-      if (body.history) {
-        messages.push({ role: "user", content: [{ text: body.message }] });
-      }
+      if (body.history) messages.push({ role: "user", content: [{ text: body.message }] });
       let system = [{text:"You are a handyman project management helper. Use 'add_invoice_line_item' tool to add costs to a job estimate, and 'log_actual_expense' to log real expenses incurred against a job."}];
-      if(body.jobId){
-        system.push({text:"You are currently in the context of job ID: "+body.jobId+". Always pass this jobId to tool calls."});
-      }
+      if(body.jobId) system.push({text:"You are currently in the context of job ID: "+body.jobId+". Always pass this jobId to tool calls."});
       let finalMessage = "";
-
       for (let i = 0; i < 3; i++) {
-        const command = new ConverseCommand({
-          modelId: "amazon.nova-lite-v1:0",
-          messages: messages,
-          system:system,
-          toolConfig: { tools }
-        });
+        const command = new ConverseCommand({ modelId: "amazon.nova-lite-v1:0", messages: messages, system:system, toolConfig: { tools } });
         const result = await bedrockClient.send(command);
         const outputMessage = result.output.message;
         messages.push(outputMessage);
-
         if (result.stopReason === "tool_use") {
           const toolResults = [];
           for (const content of outputMessage.content) {
             if (content.toolUse) {
               const toolOutput = await handleToolUse(userId, content.toolUse, body.jobId);
-              toolResults.push({
-                toolResult: { toolUseId: content.toolUse.toolUseId, content: [{ text: toolOutput }] }
-              });
+              toolResults.push({ toolResult: { toolUseId: content.toolUse.toolUseId, content: [{ text: toolOutput }] } });
             }
           }
           messages.push({ role: "user", content: toolResults });
@@ -677,15 +576,25 @@ exports.handler = async (event) => {
         if (method === "GET") {
             const waveToken = await getSetting(userId, "WAVE_TOKEN");
             const businessId = await getSetting(userId, "WAVE_BUSINESS_ID");
-            return response(200, { waveToken, businessId });
+            const companyName = await getSetting(userId, "COMPANY_NAME");
+            const companyLogoKey = await getSetting(userId, "COMPANY_LOGO_KEY");
+            const invoiceNotes = await getSetting(userId, "INVOICE_NOTES");
+            
+            let companyLogoUrl = null;
+            if (companyLogoKey) {
+                companyLogoUrl = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: FILES_BUCKET, Key: companyLogoKey }), { expiresIn: 3600 });
+            }
+            return response(200, { waveToken, businessId, companyName, companyLogoUrl, invoiceNotes });
         }
         if (method === "POST") {
-            await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: { PK: userId, SK: "SETTING#WAVE_TOKEN", value: body.waveToken } }));
-            await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: { PK: userId, SK: "SETTING#WAVE_BUSINESS_ID", value: body.businessId } }));
+            if (body.waveToken !== undefined) await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: { PK: userId, SK: "SETTING#WAVE_TOKEN", value: body.waveToken } }));
+            if (body.businessId !== undefined) await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: { PK: userId, SK: "SETTING#WAVE_BUSINESS_ID", value: body.businessId } }));
+            if (body.companyName !== undefined) await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: { PK: userId, SK: "SETTING#COMPANY_NAME", value: body.companyName } }));
+            if (body.companyLogoKey !== undefined) await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: { PK: userId, SK: "SETTING#COMPANY_LOGO_KEY", value: body.companyLogoKey } }));
+            if (body.invoiceNotes !== undefined) await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: { PK: userId, SK: "SETTING#INVOICE_NOTES", value: body.invoiceNotes } }));
             return response(200, { message: "Saved" });
         }
     }
-
     return response(404, { message: "Not Found" });
   } catch (err) {
     console.error(err);

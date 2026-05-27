@@ -211,9 +211,30 @@
             <div id="settingsContent" class="view-content d-none">
                 <h2 class="mb-4">Settings</h2>
                 <div class="card border-0 shadow-sm p-4">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold">Company Name</label>
+                            <input type="text" id="companyName" class="form-control" placeholder="e.g. Acme Construction">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold">Company Logo</label>
+                            <div class="d-flex gap-2">
+                                <input type="file" id="companyLogoUpload" class="form-control" accept="image/*">
+                                <button class="btn btn-outline-primary" onclick="uploadCompanyLogo()">Upload</button>
+                            </div>
+                            <div id="logoPreviewContainer" class="mt-2 d-none">
+                                <img id="logoPreview" src="" alt="Logo Preview" class="img-thumbnail" style="max-height: 80px;">
+                            </div>
+                        </div>
+                        <div class="col-12 mb-3">
+                            <label class="form-label fw-bold">Invoice/Estimate Notes (Appears in PDF Footer)</label>
+                            <textarea id="invoiceNotes" class="form-control" rows="3" placeholder="e.g. Please make checks payable to Acme Construction..."></textarea>
+                        </div>
+                    </div>
+                    <hr>
                     <div class="mb-3"><label class="form-label">Wave Token</label><input type="password" id="waveToken" class="form-control"></div>
                     <div class="mb-4"><label class="form-label">Wave Business ID</label><input type="text" id="businessId" class="form-control"></div>
-                    <button id="saveSettings" class="btn btn-primary">Save</button>
+                    <button id="saveSettings" class="btn btn-primary px-4 fw-bold">Save Settings</button>
                 </div>
             </div>
         </div>
@@ -235,6 +256,7 @@
                         <div id="jobCustomerResults" class="dropdown-menu w-100" style="max-height: 200px; overflow-y: auto;"></div>
                     </div>
                 </div>
+                <div class="mb-3"><label class="form-label">Payment Terms</label><input type="text" id="newJobPaymentTerms" class="form-control" placeholder="e.g. Due on Receipt, Net 30"></div>
             </div>
             <div class="modal-footer"><button type="submit" class="btn btn-primary">Create Job</button></div>
         </form>
@@ -255,8 +277,10 @@
                     <input type="text" id="editJobCustomerInput" class="form-control" placeholder="Search customer..." autocomplete="off">
                     <div id="editJobCustomerResults" class="dropdown-menu w-100" style="max-height: 200px; overflow-y: auto;"></div>
                 </div>
-            </div>
-        </div>
+                </div>
+                <div class="mb-3"><label class="form-label">Payment Terms</label><input type="text" id="editJobPaymentTerms" class="form-control" placeholder="e.g. Due on Receipt, Net 30"></div>
+                </div>
+
         <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button type="button" class="btn btn-primary" onclick="submitJobUpdate()">Save Changes</button></div>
     </div></div></div>
 
@@ -327,6 +351,8 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/amazon-cognito-identity-js/dist/amazon-cognito-identity.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

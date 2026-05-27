@@ -206,8 +206,9 @@ async function createNewJob() {
     const date = document.getElementById('newJobDate').value;
     const endDate = document.getElementById('newJobEndDate').value;
     const customerName = document.getElementById('jobCustomerInput').value;
+    const paymentTerms = document.getElementById('newJobPaymentTerms').value;
     if (!title || !date) return alert('Please fill in title and date');
-    await apiFetch('/jobs', { method: 'POST', body: JSON.stringify({ title, date, endDate, customerName }) });
+    await apiFetch('/jobs', { method: 'POST', body: JSON.stringify({ title, date, endDate, customerName, paymentTerms }) });
     bootstrap.Modal.getInstance(document.getElementById('newJobModal')).hide(); loadJobs();
 }
 
@@ -220,6 +221,7 @@ function editJob(id) {
     document.getElementById('editJobDate').value = job.date;
     document.getElementById('editJobEndDate').value = job.endDate || '';
     document.getElementById('editJobCustomerInput').value = job.customerName || '';
+    document.getElementById('editJobPaymentTerms').value = job.paymentTerms || '';
     
     new bootstrap.Modal(document.getElementById('editJobModal')).show();
 }
@@ -230,7 +232,8 @@ async function submitJobUpdate() {
         title: document.getElementById('editJobTitle').value,
         date: document.getElementById('editJobDate').value,
         endDate: document.getElementById('editJobEndDate').value,
-        customerName: document.getElementById('editJobCustomerInput').value
+        customerName: document.getElementById('editJobCustomerInput').value,
+        paymentTerms: document.getElementById('editJobPaymentTerms').value
     };
     try {
         await apiFetch('/jobs/' + id, { method: 'PATCH', body: JSON.stringify(body) });
@@ -633,14 +636,73 @@ function addChatMessage(text, role) {
 }
 
 async function loadSettings() {
-    const settings = await apiFetch('/settings');
-    document.getElementById('businessId').value = settings.businessId || '';
+    try {
+        const settings = await apiFetch('/settings');
+        document.getElementById('waveToken').value = settings.waveToken || '';
+        document.getElementById('businessId').value = settings.businessId || '';
+        document.getElementById('companyName').value = settings.companyName || '';
+        document.getElementById('invoiceNotes').value = settings.invoiceNotes || '';
+        
+        const preview = document.getElementById('logoPreview');
+        const previewContainer = document.getElementById('logoPreviewContainer');
+        if (settings.companyLogoUrl) {
+            preview.src = settings.companyLogoUrl;
+            previewContainer.classList.remove('d-none');
+        } else {
+            previewContainer.classList.add('d-none');
+        }
+    } catch (err) {
+        console.error('Failed to load settings:', err);
+    }
 }
 
 async function saveSettings() {
-    const waveToken = document.getElementById('waveToken').value, businessId = document.getElementById('businessId').value;
-    await apiFetch('/settings', { method: 'POST', body: JSON.stringify({ waveToken, businessId }) });
-    alert('Saved!');
+    const body = {
+        waveToken: document.getElementById('waveToken').value,
+        businessId: document.getElementById('businessId').value,
+        companyName: document.getElementById('companyName').value,
+        invoiceNotes: document.getElementById('invoiceNotes').value
+    };
+    try {
+        await apiFetch('/settings', { method: 'POST', body: JSON.stringify(body) });
+        showToast('Success', 'Settings saved successfully');
+    } catch (err) {
+        showToast('Error', 'Failed to save settings');
+    }
+}
+
+async function uploadCompanyLogo() {
+    const fileInput = document.getElementById('companyLogoUpload');
+    if (!fileInput.files.length) return alert('Select a logo image first');
+    
+    const file = fileInput.files[0];
+    showToast('Logo', 'Uploading logo...');
+    
+    try {
+        // 1. Get presigned upload URL with branding=true flag
+        const { uploadUrl, key } = await apiFetch(`/jobs/branding/files/upload-url?fileName=${encodeURIComponent(file.name)}&fileType=${encodeURIComponent(file.type)}&branding=true`);
+        
+        // 2. Direct upload to S3
+        const s3Response = await fetch(uploadUrl, {
+            method: 'PUT',
+            body: file,
+            headers: { 'Content-Type': file.type }
+        });
+        
+        if (!s3Response.ok) throw new Error('Logo Upload Failed');
+
+        // 3. Save key to settings
+        await apiFetch('/settings', { 
+            method: 'POST', 
+            body: JSON.stringify({ companyLogoKey: key }) 
+        });
+
+        showToast('Success', 'Logo uploaded successfully');
+        loadSettings(); // Refresh preview
+    } catch (err) {
+        console.error('Logo upload error:', err);
+        showToast('Error', 'Failed to upload logo: ' + err.message);
+    }
 }
 
 window.onload = () => {
@@ -818,14 +880,150 @@ function showNewVisitModal() {
     new bootstrap.Modal(document.getElementById('newVisitModal')).show();
 }
 
-async function generateJobPdf(id) {
+async function generateJobPdf(jobId) {
+    const job = allJobs.find(j => j.id === jobId);
+    if (!job) return;
+
     showToast('PDF', 'Generating PDF...');
+    
     try {
-        await apiFetch(`/jobs/${id}/pdf`, { method: 'POST' });
-        showToast('Success', 'PDF generated successfully');
-        loadJobs().then(() => viewJob(id));
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+        
+        // Fetch branding info from settings
+        const settings = await apiFetch('/settings');
+        const companyName = settings.companyName || 'My Handyman Business';
+        const logoUrl = settings.companyLogoUrl;
+        const invoiceNotes = settings.invoiceNotes || '';
+
+        // Fetch customer details for address
+        let customerAddress = '';
+        if (job.customerName) {
+            try {
+                const customers = await apiFetch('/customers');
+                const customer = customers.find(c => c.name === job.customerName);
+                if (customer && customer.address) customerAddress = customer.address;
+            } catch (e) { console.error("Failed to fetch customer address:", e); }
+        }
+
+        let startY = 20;
+        let img = null;
+
+        // Add Logo if exists
+        if (logoUrl) {
+            try {
+                img = new Image();
+                img.crossOrigin = "Anonymous";
+                await new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = reject;
+                    img.src = logoUrl;
+                });
+                const ratio = img.width / img.height;
+                const width = 25 * ratio;
+                doc.addImage(img, 'PNG', 14, 15, width, 25);
+                startY = 45;
+            } catch (e) {
+                console.error("Failed to add logo to PDF:", e);
+                img = null;
+            }
+        }
+        
+        // Add Company Name
+        doc.setFontSize(24);
+        doc.setTextColor(44, 62, 80); // Dark Blue-Grey
+        doc.setFont("helvetica", "bold");
+        const logoWidth = (img && img.complete) ? (25 * (img.width / img.height)) + 5 : 0;
+        doc.text(companyName, 14 + logoWidth, 32);
+        
+        // Horizontal Line
+        doc.setDrawColor(189, 195, 199);
+        doc.setLineWidth(0.5);
+        doc.line(14, startY + 5, 196, startY + 5);
+
+        // Document Title
+        doc.setFontSize(18);
+        doc.setTextColor(40);
+        doc.text("Estimate / Invoice", 14, startY + 15);
+        
+        // Info Section (Two Columns)
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(100);
+
+        // Column 1: Bill To
+        doc.setFont("helvetica", "bold"); doc.text("Bill To:", 14, startY + 25); doc.setFont("helvetica", "normal");
+        doc.text(job.customerName || 'N/A', 14, startY + 30);
+        if (customerAddress) {
+            const splitAddress = doc.splitTextToSize(customerAddress, 80);
+            doc.text(splitAddress, 14, startY + 35);
+        }
+
+        // Column 2: Job Details
+        const col2X = 120;
+        doc.setFont("helvetica", "bold"); doc.text("Details:", col2X, startY + 25); doc.setFont("helvetica", "normal");
+        doc.text(`Job Title: ${job.title}`, col2X, startY + 30);
+        doc.text(`Date: ${job.date}`, col2X, startY + 35);
+        if (job.paymentTerms) {
+            doc.text(`Terms: ${job.paymentTerms}`, col2X, startY + 40);
+        }
+        
+        // Add Table
+        const tableData = job.lines.map(l => [l.description, l.type, l.quantity, `$${l.cost.toFixed(2)}`, `$${(l.cost * l.quantity).toFixed(2)}`]);
+        const total = job.lines.reduce((sum, l) => sum + (l.cost * l.quantity), 0);
+        
+        doc.autoTable({
+            startY: startY + 50,
+            head: [['Description', 'Type', 'Qty', 'Unit Cost', 'Total']],
+            body: tableData,
+            foot: [['', '', '', 'Grand Total:', `$${total.toFixed(2)}`]],
+            theme: 'striped',
+            headStyles: { fillColor: [44, 62, 80], textColor: [255, 255, 255] },
+            footStyles: { fillColor: [241, 241, 241], textColor: [0, 0, 0], fontStyle: 'bold' },
+            margin: { left: 14, right: 14 }
+        });
+
+        // Add Footer Notes
+        const finalY = doc.lastAutoTable.finalY + 15;
+        if (invoiceNotes) {
+            doc.setFontSize(9);
+            doc.setFont("helvetica", "italic");
+            doc.setTextColor(120);
+            const splitNotes = doc.splitTextToSize(invoiceNotes, 180);
+            doc.text(splitNotes, 14, finalY);
+        }
+
+        // Convert to Blob and Preview
+        const pdfBlob = doc.output('blob');
+        const blobURL = URL.createObjectURL(pdfBlob);
+        window.open(blobURL, '_blank');
+        
+        const fileName = `Invoice_${jobId}_${Date.now()}.pdf`;
+        showToast('Upload', 'Uploading to S3...');
+
+        // 1. Get presigned upload URL
+        const { uploadUrl, key } = await apiFetch(`/jobs/${jobId}/files/upload-url?fileName=${encodeURIComponent(fileName)}&fileType=application/pdf`);
+        
+        // 2. Direct upload to S3
+        const s3Response = await fetch(uploadUrl, {
+            method: 'PUT',
+            body: pdfBlob,
+            headers: { 'Content-Type': 'application/pdf' }
+        });
+        
+        if (!s3Response.ok) throw new Error('S3 Upload Failed');
+
+        // 3. Record in backend
+        await apiFetch(`/jobs/${jobId}/files`, { 
+            method: 'POST', 
+            body: JSON.stringify({ name: fileName, tag: 'Generated', key: key }) 
+        });
+
+        showToast('Success', 'Branded PDF generated and stored');
+        loadJobs().then(() => viewJob(jobId));
     } catch (err) {
-        showToast('Error', 'Failed to generate PDF');
+        console.error('PDF error:', err);
+        showToast('Error', 'Failed to generate PDF: ' + err.message);
     }
 }
 
