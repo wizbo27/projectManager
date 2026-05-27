@@ -74,7 +74,12 @@
                 <div class="row mt-4">
                     <div class="col-md-7">
                         <div class="card border-0 shadow-sm mb-4">
-                            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center"><h5 class="mb-0 text-success">Estimate / Invoice Items</h5></div>
+                            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                                <h5 class="mb-0 text-success">Estimate / Invoice Items</h5>
+                                <button id="toggleEditItems" class="btn btn-sm btn-outline-secondary" onclick="toggleItemsEdit()">
+                                    <i class="fas fa-edit me-1"></i> Edit Items
+                                </button>
+                            </div>
                             <div class="card-body">
                                 <table class="table table-sm small">
                                     <thead><tr><th>Desc</th><th>Type</th><th>Qty</th><th>Cost</th></tr></thead>
@@ -125,6 +130,41 @@
             </div>
         </div>
     </div>
+
+    <div class="modal fade" id="newJobModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">New Job</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <form id="newJobForm" onsubmit="event.preventDefault(); createNewJob();">
+            <div class="modal-body">
+                <div class="mb-3"><label class="form-label">Job Title</label><input type="text" id="newJobTitle" class="form-control" placeholder="e.g. Kitchen Remodel" required></div>
+                <div class="mb-3"><label class="form-label">Date</label><input type="date" id="newJobDate" class="form-control" required></div>
+                <div class="mb-3">
+                    <label class="form-label">Customer</label>
+                    <div class="position-relative">
+                        <input type="text" id="jobCustomerInput" class="form-control" placeholder="Search customer..." autocomplete="off">
+                        <div id="jobCustomerResults" class="dropdown-menu w-100" style="max-height: 200px; overflow-y: auto;"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer"><button type="submit" class="btn btn-primary">Create Job</button></div>
+        </form>
+    </div></div></div>
+
+    <div class="modal fade" id="editJobModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">Edit Job</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <input type="hidden" id="editJobId">
+            <div class="mb-3"><label class="form-label">Job Title</label><input type="text" id="editJobTitle" class="form-control"></div>
+            <div class="mb-3"><label class="form-label">Date</label><input type="date" id="editJobDate" class="form-control"></div>
+            <div class="mb-3">
+                <label class="form-label">Customer</label>
+                <div class="position-relative">
+                    <input type="text" id="editJobCustomerInput" class="form-control" placeholder="Search customer..." autocomplete="off">
+                    <div id="editJobCustomerResults" class="dropdown-menu w-100" style="max-height: 200px; overflow-y: auto;"></div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button type="button" class="btn btn-primary" onclick="submitJobUpdate()">Save Changes</button></div>
+    </div></div></div>
 
     <div class="modal fade" id="newItemModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
         <div class="modal-header"><h5 class="modal-title">Add Line Item</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>

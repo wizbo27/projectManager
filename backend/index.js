@@ -199,13 +199,36 @@ exports.handler = async (event) => {
     // Customers
     if (path === "/customers") {
         if (method === "GET") {
+            const query = event.queryStringParameters?.q;
+            const scanParams = {
+                TableName: DATA_TABLE,
+                FilterExpression: "begins_with(SK, :sk)",
+                ExpressionAttributeValues: { ":sk": "CUSTOMER#" }
+            };
+
+            if (query) {
+                scanParams.FilterExpression += " AND contains(#n, :q)";
+                scanParams.ExpressionAttributeNames = { "#n": "name" };
+                scanParams.ExpressionAttributeValues[":q"] = query;
+            }
+
             const result = await docClient.send(new QueryCommand({
                 TableName: DATA_TABLE,
                 KeyConditionExpression: "PK = :pk AND begins_with(SK, :sk)",
                 ExpressionAttributeValues: { ":pk": userId, ":sk": "CUSTOMER#" }
             }));
-            return response(200, result.Items || []);
+            
+            // If searching, we might need a Scan if we can't use Query effectively on non-key attributes, 
+            // but since we are already filtering by PK (userId) and SK (CUSTOMER#), 
+            // we can just filter the result of the Query in memory or use a FilterExpression in the Query.
+            
+            let items = result.Items || [];
+            if (query) {
+                items = items.filter(item => item.name && item.name.toLowerCase().includes(query.toLowerCase()));
+            }
+            return response(200, items);
         }
+
         if (method === "POST" || method === "PATCH") {
             const cid = body.id || Date.now().toString();
             await docClient.send(new PutCommand({
@@ -259,25 +282,69 @@ exports.handler = async (event) => {
     
     if (path.startsWith("/jobs/")) {
         const jobId = path.split("/")[2];
+        if (path.endsWith("/status") && method === "PATCH") {
+            const { status } = body;
+            const validStatuses = ['ESTIMATE', 'APPROVED', 'IN PROGRESS', 'INVOICED', 'PAID'];
+            if (!validStatuses.includes(status)) {
+                return response(400, { message: "Invalid status value" });
+            }
+            
+            const updateExpression = status === 'APPROVED' 
+                ? "SET #s = :s, approvalDate = :ad" 
+                : "SET #s = :s";
+            const expressionAttributeValues = status === 'APPROVED'
+                ? { ":s": status, ":ad": new Date().toISOString() }
+                : { ":s": status };
+
+            await docClient.send(new UpdateCommand({
+                TableName: DATA_TABLE,
+                Key: { PK: userId, SK: `JOB#${jobId}` },
+                UpdateExpression: updateExpression,
+                ExpressionAttributeNames: { "#s": "status" },
+                ExpressionAttributeValues: expressionAttributeValues
+            }));
+            return response(200, { message: `Status updated to ${status}` });
+        }
         if (method === "PATCH") {
             await docClient.send(new UpdateCommand({
                 TableName: DATA_TABLE,
                 Key: { PK: userId, SK: `JOB#${jobId}` },
-                UpdateExpression: "SET title = :t, #d = :d",
+                UpdateExpression: "SET title = :t, #d = :d, customerName = :c",
                 ExpressionAttributeNames: { "#d": "date" },
-                ExpressionAttributeValues: { ":t": body.title, ":d": body.date }
+                ExpressionAttributeValues: { ":t": body.title, ":d": body.date, ":c": body.customerName || null }
             }));
             return response(200, { message: "Job updated" });
         }
-        if (path.endsWith("/convert")) {
-            await docClient.send(new UpdateCommand({
+        if (path.endsWith("/items/bulk") && method === "POST") {
+            const lines = body.lines || [];
+            // 1. Delete existing line items for this job
+            const existingItems = await docClient.send(new QueryCommand({
                 TableName: DATA_TABLE,
-                Key: { PK: userId, SK: `JOB#${jobId}` },
-                UpdateExpression: "SET #s = :s",
-                ExpressionAttributeNames: { "#s": "status" },
-                ExpressionAttributeValues: { ":s": "INVOICE" }
+                KeyConditionExpression: "PK = :pk AND begins_with(SK, :sk)",
+                ExpressionAttributeValues: { ":pk": userId, ":sk": `JOB#${jobId}#LINE` }
             }));
-            return response(200, { message: "Converted to Invoice" });
+            
+            for (const item of (existingItems.Items || [])) {
+                await docClient.send(new DeleteCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: item.SK } }));
+            }
+            
+            // 2. Add new updated lines
+            for (const line of lines) {
+                const itemId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+                await docClient.send(new PutCommand({
+                    TableName: DATA_TABLE,
+                    Item: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}`, ...line }
+                }));
+            }
+            return response(200, { message: "Bulk update successful" });
+        }
+        if (path.match(/\/jobs\/.*\/items\/.*$/) && method === "DELETE") {
+            const itemId = path.split("/").pop();
+            await docClient.send(new DeleteCommand({
+                TableName: DATA_TABLE,
+                Key: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}` }
+            }));
+            return response(200, { message: "Item deleted" });
         }
         if (path.endsWith("/items") && method === "POST") {
             const itemId = Date.now().toString();
@@ -333,6 +400,11 @@ exports.handler = async (event) => {
 
     // Settings
     if (path === "/settings") {
+        if (method === "GET") {
+            const waveToken = await getSetting(userId, "WAVE_TOKEN");
+            const businessId = await getSetting(userId, "WAVE_BUSINESS_ID");
+            return response(200, { waveToken, businessId });
+        }
         if (method === "POST") {
             await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: { PK: userId, SK: "SETTING#WAVE_TOKEN", value: body.waveToken } }));
             await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: { PK: userId, SK: "SETTING#WAVE_BUSINESS_ID", value: body.businessId } }));

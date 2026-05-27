@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Infrastructure for ProjectManager AI
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 128
+    Runtime: nodejs20.x
+    Architectures:
+      - x86_64
+
+Resources:
+  # --- DATABASE: DynamoDB Single-Table Design ---
+  ProjectManagerTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ProjectManagerUserData
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+
+  # --- BACKEND: Lambda Function ---
+  ProjectManagerBackend:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ProjectManagerBackend
+      Handler: index.handler
+      CodeUri: ./backend
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ProjectManagerTable
+        - BedrockRuntimePolicy: {} # Custom policy for Bedrock access
+      Environment:
+        Variables:
+          DATA_TABLE: !Ref ProjectManagerTable
+          AWS_REGION: us-east-1
+
+  # --- FRONTEND: S3 Static Website Bucket ---
+  ProjectManagerWebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: project-manager-web-898934810428
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  # --- AUTH: Cognito User Pool ---
+  ProjectManagerUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: ProjectManagerUserPool
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+
+  ProjectManagerUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: ProjectManagerClient
+      UserPoolId: !Ref ProjectManagerUserPool
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+Outputs:
+  WebsiteURL:
+    Description: "URL for the frontend website"
+    Value: !GetAtt ProjectManagerWebBucket.WebsiteURL
+  LambdaArn:
+    Description: "ARN of the backend Lambda"
+    Value: !GetAtt ProjectManagerBackend.Arn
+  UserPoolId:
+    Description: "Cognito User Pool ID"
+    Value: !Ref ProjectManagerUserPool
+  ClientId:
+    Description: "Cognito Client ID"
+    Value: !Ref ProjectManagerUserPoolClient
