@@ -8,6 +8,24 @@ const dbClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(dbClient);
 
 const DATA_TABLE = "ProjectManagerUserData";
+const HISTORY_TABLE = process.env.HISTORY_TABLE || "ProjectManagerJobHistory";
+
+async function logJobHistory(jobId, changeType, description) {
+  try {
+    const timestamp = new Date().toISOString();
+    await docClient.send(new PutCommand({
+      TableName: HISTORY_TABLE,
+      Item: {
+        JobId: jobId,
+        Timestamp: timestamp,
+        ChangeType: changeType,
+        Description: description
+      }
+    }));
+  } catch (err) {
+    console.error("Failed to log job history:", err);
+  }
+}
 
 // Tool definitions
 const tools = [
@@ -132,6 +150,7 @@ async function handleToolUse(userId, toolUse, jobId) {
     const newJobId = Date.now().toString();
     const item = { PK: userId, SK: `JOB#${newJobId}`, title: input.title, date: input.date, customerName: input.customerName || null, status: 'ESTIMATE', createdAt: new Date().toISOString() };
     await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: item }));
+    await logJobHistory(newJobId, "CREATED", `Job "${input.title}" created via AI Assistant.`);
     return `Job "${input.title}" created. ID: ${newJobId}`;
   }
 
@@ -166,6 +185,24 @@ async function handleToolUse(userId, toolUse, jobId) {
 
   if (name === "search_lowes_materials") {
     return `Found: ${input.query}. Price: $29.99 (Simulated)`;
+  }
+
+  if (name === "add_invoice_line_item") {
+    const targetJobId = input.jobId || jobId;
+    if (!targetJobId) return "Error: No job context provided.";
+    
+    const itemId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+    const item = {
+      PK: userId,
+      SK: `JOB#${targetJobId}#LINE#${itemId}`,
+      description: input.description,
+      type: input.type,
+      cost: input.cost,
+      quantity: input.quantity
+    };
+    await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: item }));
+    await logJobHistory(targetJobId, "LINE_ITEM_ADDED", `Added item "${input.description}" (${input.quantity}x @ $${input.cost}) via AI Assistant.`);
+    return `Added line item: "${input.description}" (${input.quantity}x @ $${input.cost}) to job ID: ${targetJobId}.`;
   }
 
   return "Tool not implemented.";
@@ -276,6 +313,7 @@ exports.handler = async (event) => {
         const jobId = Date.now().toString();
         const item = { PK: userId, SK: `JOB#${jobId}`, title: body.title, date: body.date, customerName: body.customerName || null, status: 'ESTIMATE', createdAt: new Date().toISOString() };
         await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: item }));
+        await logJobHistory(jobId, "CREATED", `Job "${body.title}" created.`);
         return response(201, { id: jobId });
       }
     }
@@ -289,6 +327,12 @@ exports.handler = async (event) => {
                 return response(400, { message: "Invalid status value" });
             }
             
+            const oldJob = await docClient.send(new GetCommand({
+                TableName: DATA_TABLE,
+                Key: { PK: userId, SK: `JOB#${jobId}` }
+            }));
+            const oldStatus = oldJob.Item ? oldJob.Item.status : 'UNKNOWN';
+
             const updateExpression = status === 'APPROVED' 
                 ? "SET #s = :s, approvalDate = :ad" 
                 : "SET #s = :s";
@@ -303,9 +347,15 @@ exports.handler = async (event) => {
                 ExpressionAttributeNames: { "#s": "status" },
                 ExpressionAttributeValues: expressionAttributeValues
             }));
+            await logJobHistory(jobId, "STATUS_CHANGE", `Status updated from ${oldStatus} to ${status}`);
             return response(200, { message: `Status updated to ${status}` });
         }
         if (method === "PATCH") {
+            const oldJob = await docClient.send(new GetCommand({
+                TableName: DATA_TABLE,
+                Key: { PK: userId, SK: `JOB#${jobId}` }
+            }));
+
             await docClient.send(new UpdateCommand({
                 TableName: DATA_TABLE,
                 Key: { PK: userId, SK: `JOB#${jobId}` },
@@ -313,6 +363,18 @@ exports.handler = async (event) => {
                 ExpressionAttributeNames: { "#d": "date" },
                 ExpressionAttributeValues: { ":t": body.title, ":d": body.date, ":c": body.customerName || null }
             }));
+
+            const changes = [];
+            if (oldJob.Item) {
+                if (oldJob.Item.title !== body.title) changes.push(`title changed from "${oldJob.Item.title}" to "${body.title}"`);
+                if (oldJob.Item.date !== body.date) changes.push(`date changed from "${oldJob.Item.date}" to "${body.date}"`);
+                const oldCust = oldJob.Item.customerName || "None";
+                const newCust = body.customerName || "None";
+                if (oldCust !== newCust) changes.push(`customer changed from "${oldCust}" to "${newCust}"`);
+            }
+            const changeDesc = changes.length > 0 ? `Job details updated: ${changes.join(", ")}` : "Job details saved.";
+            await logJobHistory(jobId, "UPDATED", changeDesc);
+
             return response(200, { message: "Job updated" });
         }
         if (path.endsWith("/items/bulk") && method === "POST") {
@@ -323,6 +385,7 @@ exports.handler = async (event) => {
                 KeyConditionExpression: "PK = :pk AND begins_with(SK, :sk)",
                 ExpressionAttributeValues: { ":pk": userId, ":sk": `JOB#${jobId}#LINE` }
             }));
+            const oldTotal = (existingItems.Items || []).reduce((sum, l) => sum + (l.cost * l.quantity), 0);
             
             for (const item of (existingItems.Items || [])) {
                 await docClient.send(new DeleteCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: item.SK } }));
@@ -336,14 +399,24 @@ exports.handler = async (event) => {
                     Item: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}`, ...line }
                 }));
             }
+            
+            const newTotal = lines.reduce((sum, l) => sum + (l.cost * l.quantity), 0);
+            await logJobHistory(jobId, "LINE_ITEMS_BULK_UPDATE", `Bulk updated line items. Total changed from $${oldTotal.toFixed(2)} to $${newTotal.toFixed(2)} (${lines.length} items total)`);
             return response(200, { message: "Bulk update successful" });
         }
         if (path.match(/\/jobs\/.*\/items\/.*$/) && method === "DELETE") {
             const itemId = path.split("/").pop();
+            const existingItem = await docClient.send(new GetCommand({
+                TableName: DATA_TABLE,
+                Key: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}` }
+            }));
+            const itemDesc = existingItem.Item ? existingItem.Item.description : 'Unknown Item';
+
             await docClient.send(new DeleteCommand({
                 TableName: DATA_TABLE,
                 Key: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}` }
             }));
+            await logJobHistory(jobId, "LINE_ITEM_DELETED", `Deleted item "${itemDesc}"`);
             return response(200, { message: "Item deleted" });
         }
         if (path.endsWith("/items") && method === "POST") {
@@ -352,7 +425,17 @@ exports.handler = async (event) => {
                 TableName: DATA_TABLE,
                 Item: { PK: userId, SK: `JOB#${jobId}#LINE#${itemId}`, ...body }
             }));
+            await logJobHistory(jobId, "LINE_ITEM_ADDED", `Added item "${body.description}" (${body.quantity}x @ $${body.cost})`);
             return response(201, { id: itemId });
+        }
+        if (path.endsWith("/history") && method === "GET") {
+            const result = await docClient.send(new QueryCommand({
+                TableName: HISTORY_TABLE,
+                KeyConditionExpression: "JobId = :jobId",
+                ExpressionAttributeValues: { ":jobId": jobId },
+                ScanIndexForward: false
+            }));
+            return response(200, result.Items || []);
         }
     }
 

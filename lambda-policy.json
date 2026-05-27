@@ -13,7 +13,8 @@
       ],
       "Resource": [
         "arn:aws:dynamodb:*:898934810428:table/ProjectManagerSettings",
-        "arn:aws:dynamodb:*:898934810428:table/ProjectManagerUserData"
+        "arn:aws:dynamodb:*:898934810428:table/ProjectManagerUserData",
+        "arn:aws:dynamodb:*:898934810428:table/ProjectManagerJobHistory"
       ]
     },
     {

@@ -406,6 +406,55 @@ function viewJob(id) {
             <span class="badge ${getStatusBadgeClass(job.status)} p-2 px-3">${job.status}</span>
         </div>
         ${nextStatus ? `<button class="btn btn-primary w-100 fw-bold" onclick="advanceStatus('${id}')">MOVE TO ${nextStatus}</button>` : `<p class="text-center text-success fw-bold"><i class="fas fa-check-circle me-2"></i>Job Fully Paid</p>`}`;
+
+    // Reset history section to collapsed by default
+    const collapseEl = document.getElementById('jobHistoryCollapse');
+    if (collapseEl && collapseEl.classList.contains('show')) {
+        collapseEl.classList.remove('show');
+        const header = document.querySelector('[data-bs-target="#jobHistoryCollapse"]');
+        header?.classList.add('collapsed');
+        header?.setAttribute('aria-expanded', 'false');
+    }
+    loadJobHistory(id);
+}
+
+async function loadJobHistory(jobId) {
+    const list = document.getElementById('jobHistoryList');
+    list.innerHTML = '<tr><td colspan="3" class="text-center py-3"><div class="spinner-border spinner-border-sm text-secondary"></div></td></tr>';
+    
+    const collapseEl = document.getElementById('jobHistoryCollapse');
+    if (collapseEl && !collapseEl.classList.contains('show')) {
+        const header = document.querySelector('[data-bs-target="#jobHistoryCollapse"]');
+        header?.classList.add('collapsed');
+    }
+
+    try {
+        const history = await apiFetch(`/jobs/${jobId}/history`);
+        if (!history || history.length === 0) {
+            list.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-3">No history events.</td></tr>';
+            return;
+        }
+        list.innerHTML = history.map(item => {
+            const date = new Date(item.Timestamp).toLocaleString();
+            let badgeClass = 'bg-secondary';
+            if (item.ChangeType === 'CREATED') badgeClass = 'bg-success';
+            else if (item.ChangeType === 'STATUS_CHANGE') badgeClass = 'bg-info text-dark';
+            else if (item.ChangeType === 'LINE_ITEM_ADDED') badgeClass = 'bg-primary';
+            else if (item.ChangeType === 'LINE_ITEM_DELETED') badgeClass = 'bg-danger';
+            else if (item.ChangeType === 'LINE_ITEMS_BULK_UPDATE') badgeClass = 'bg-warning text-dark';
+            else if (item.ChangeType === 'UPDATED') badgeClass = 'bg-dark';
+            
+            return `
+                <tr>
+                    <td><small class="text-muted">${date}</small></td>
+                    <td><span class="badge ${badgeClass} text-uppercase" style="font-size: 0.7rem;">${item.ChangeType.replace(/_/g, ' ')}</span></td>
+                    <td><small>${item.Description}</small></td>
+                </tr>
+            `;
+        }).join('');
+    } catch (err) {
+        list.innerHTML = '<tr><td colspan="3" class="text-center text-danger py-3">Failed to load history.</td></tr>';
+    }
 }
 
 window.chatWithJob = function(jobId) {

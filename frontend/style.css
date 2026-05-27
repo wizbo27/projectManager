@@ -27,3 +27,6 @@
 
 .list-group-item { border: none; padding: 15px 0; border-bottom: 1px solid #eee; }
 .list-group-item:last-child { border-bottom: none; }
+
+.transition-transform { transition: transform 0.2s ease; }
+.collapsed .transition-transform { transform: rotate(-90deg); }

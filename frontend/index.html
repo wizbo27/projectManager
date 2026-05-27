@@ -87,6 +87,32 @@
                                 </table>
                             </div>
                         </div>
+                        <div class="card border-0 shadow-sm mb-4">
+                            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center cursor-pointer" data-bs-toggle="collapse" data-bs-target="#jobHistoryCollapse" aria-expanded="false" aria-controls="jobHistoryCollapse" style="user-select: none;">
+                                <h5 class="mb-0 text-secondary"><i class="fas fa-history me-2"></i>Job History</h5>
+                                <i class="fas fa-chevron-down transition-transform" id="historyCollapseIcon"></i>
+                            </div>
+                            <div id="jobHistoryCollapse" class="collapse">
+                                <div class="card-body">
+                                    <div class="table-responsive">
+                                        <table class="table table-sm small table-hover mb-0">
+                                            <thead>
+                                                <tr>
+                                                    <th style="width: 30%;">Date & Time</th>
+                                                    <th style="width: 25%;">Event Type</th>
+                                                    <th style="width: 45%;">Description</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="jobHistoryList">
+                                                <tr>
+                                                    <td colspan="3" class="text-center text-muted">No history events.</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <div class="col-md-5">
                         <div class="card border-0 shadow-sm mb-4">
