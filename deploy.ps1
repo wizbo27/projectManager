@@ -24,7 +24,7 @@ try {
     Pop-Location
 
     Write-Host "Uploading to AWS Lambda: $LAMBDA_FUNCTION_NAME..."
-    aws lambda update-function-code --function-name $LAMBDA_FUNCTION_NAME --zip-file "fileb://$zipFile"
+    $out = aws lambda update-function-code --function-name $LAMBDA_FUNCTION_NAME --zip-file "fileb://$zipFile"
     
     if ($LASTEXITCODE -eq 0) {
         Write-Host " Backend deployed successfully!"

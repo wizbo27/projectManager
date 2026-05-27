@@ -40,12 +40,27 @@ Resources:
             TableName: !Ref ProjectManagerTable
         - DynamoDBCrudPolicy:
             TableName: !Ref ProjectManagerJobHistoryTable
+        - S3CrudPolicy:
+            BucketName: !Ref ProjectManagerFilesBucket
         - BedrockRuntimePolicy: {} # Custom policy for Bedrock access
       Environment:
         Variables:
           DATA_TABLE: !Ref ProjectManagerTable
           HISTORY_TABLE: !Ref ProjectManagerJobHistoryTable
+          FILES_BUCKET: !Ref ProjectManagerFilesBucket
           AWS_REGION: us-east-1
+
+  # --- STORAGE: Job Files S3 Bucket ---
+  ProjectManagerFilesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: project-manager-files-898934810428
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, PUT, POST, DELETE, HEAD]
+            AllowedOrigins: ['*']
+            MaxAge: 3600
 
   # --- DATABASE: DynamoDB Job History Table ---
   ProjectManagerJobHistoryTable:

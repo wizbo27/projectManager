@@ -1,14 +1,18 @@
 const { BedrockRuntimeClient, ConverseCommand } = require("@aws-sdk/client-bedrock-runtime");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, DeleteCommand, UpdateCommand } = require("@aws-sdk/lib-dynamodb");
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const axios = require("axios");
 
 const bedrockClient = new BedrockRuntimeClient({ region: process.env.AWS_REGION || "us-east-1" });
 const dbClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(dbClient);
+const s3Client = new S3Client({});
 
 const DATA_TABLE = "ProjectManagerUserData";
 const HISTORY_TABLE = process.env.HISTORY_TABLE || "ProjectManagerJobHistory";
+const FILES_BUCKET = process.env.FILES_BUCKET;
 
 async function logJobHistory(jobId, changeType, description) {
   try {
@@ -108,6 +112,24 @@ const tools = [
             quantity: { type: "number" }
           },
           required: ["jobId", "description", "type", "cost", "quantity"]
+        }
+      }
+    }
+  },
+  {
+    toolSpec: {
+      name: "log_actual_expense",
+      description: "Log an actual expense incurred against a job.",
+      inputSchema: {
+        json: {
+          type: "object",
+          properties: {
+            jobId: { type: "string" },
+            description: { type: "string" },
+            cost: { type: "number" },
+            quantity: { type: "number" }
+          },
+          required: ["jobId", "description", "cost", "quantity"]
         }
       }
     }
@@ -215,8 +237,27 @@ async function handleToolUse(userId, toolUse, jobId) {
     return `Added line item: "${input.description}" (${input.quantity}x @ $${input.cost}) to job ID: ${targetJobId}.`;
   }
 
+  if (name === "log_actual_expense") {
+    const targetJobId = input.jobId || jobId;
+    if (!targetJobId) return "Error: No job context provided.";
+    
+    const expenseId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+    const expenseItem = {
+      PK: userId,
+      SK: `JOB#${targetJobId}#EXPENSE#${expenseId}`,
+      description: input.description,
+      cost: input.cost,
+      quantity: input.quantity,
+      timestamp: new Date().toISOString()
+    };
+    await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: expenseItem }));
+    await logJobHistory(targetJobId, "EXPENSE_LOGGED", `Logged expense "${input.description}" ($${input.cost} x ${input.quantity}) via AI Assistant.`);
+    return `Logged expense: "${input.description}" ($${input.cost} x ${input.quantity}) to job ID: ${targetJobId}.`;
+  }
+
   return "Tool not implemented.";
 }
+
 
 exports.handler = async (event) => {
   console.log("Event:", JSON.stringify(event));
@@ -309,18 +350,28 @@ exports.handler = async (event) => {
           ExpressionAttributeValues: { ":pk": userId, ":sk": "JOB#" }
         }));
         const jobs = {};
-        result.Items.forEach(item => {
+        for (const item of result.Items) {
           const parts = item.SK.split("#");
           const jobId = parts[1];
-          if (!jobs[jobId]) jobs[jobId] = { id: jobId, lines: [], todos: [], visits: [] };
+          if (!jobs[jobId]) jobs[jobId] = { id: jobId, lines: [], todos: [], visits: [], expenses: [], files: [] };
           if (parts.length === 2) Object.assign(jobs[jobId], item);
           else if (parts[2] === "LINE") jobs[jobId].lines.push(item);
           else if (parts[2] === "TODO") jobs[jobId].todos.push(item);
+          else if (parts[2] === "EXPENSE") jobs[jobId].expenses.push(item);
+          else if (parts[2] === "FILE") {
+            if (item.key) {
+              item.url = await getSignedUrl(s3Client, new GetObjectCommand({
+                Bucket: FILES_BUCKET,
+                Key: item.key
+              }), { expiresIn: 3600 });
+            }
+            jobs[jobId].files.push(item);
+          }
           else if (parts[2] === "VISIT") {
             if (!jobs[jobId].visits) jobs[jobId].visits = [];
             jobs[jobId].visits.push(item);
           }
-        });
+        }
         return response(200, Object.values(jobs));
       }
       if (method === "POST") {
@@ -428,6 +479,77 @@ exports.handler = async (event) => {
             await logJobHistory(jobId, "LINE_ITEMS_BULK_UPDATE", `Bulk updated line items. Total changed from $${oldTotal.toFixed(2)} to $${newTotal.toFixed(2)} (${lines.length} items total)`);
             return response(200, { message: "Bulk update successful" });
         }
+        if (path.endsWith("/expenses/bulk") && method === "POST") {
+            const expenses = body.expenses || [];
+            // 1. Delete existing expenses for this job
+            const existingExpenses = await docClient.send(new QueryCommand({
+                TableName: DATA_TABLE,
+                KeyConditionExpression: "PK = :pk AND begins_with(SK, :sk)",
+                ExpressionAttributeValues: { ":pk": userId, ":sk": `JOB#${jobId}#EXPENSE` }
+            }));
+            
+            for (const item of (existingExpenses.Items || [])) {
+                await docClient.send(new DeleteCommand({ TableName: DATA_TABLE, Key: { PK: userId, SK: item.SK } }));
+            }
+            
+            // 2. Add new updated expenses
+            for (const exp of expenses) {
+                const expenseId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+                await docClient.send(new PutCommand({
+                    TableName: DATA_TABLE,
+                    Item: { PK: userId, SK: `JOB#${jobId}#EXPENSE#${expenseId}`, description: exp.description, cost: exp.cost, quantity: exp.quantity, timestamp: exp.timestamp || new Date().toISOString() }
+                }));
+            }
+            
+            await logJobHistory(jobId, "EXPENSES_BULK_UPDATE", `Bulk updated ${expenses.length} expense items.`);
+            return response(200, { message: "Bulk expense update successful" });
+        }
+        if (path.endsWith("/files/upload-url") && method === "GET") {
+            const fileName = event.queryStringParameters?.fileName;
+            const fileType = event.queryStringParameters?.fileType;
+            if (!fileName) return response(400, { message: "fileName is required" });
+            
+            const key = `uploads/${userId}/${jobId}/${Date.now()}_${fileName}`;
+            const uploadUrl = await getSignedUrl(s3Client, new PutObjectCommand({
+                Bucket: FILES_BUCKET,
+                Key: key,
+                ContentType: fileType || 'application/octet-stream'
+            }), { expiresIn: 300 });
+            
+            return response(200, { uploadUrl, key });
+        }
+        if (path.endsWith("/pdf") && method === "POST") {
+            const fileName = `Invoice_${jobId}_${Date.now()}.pdf`;
+            const key = `generated/${userId}/${jobId}/${fileName}`;
+            // In a real app, you'd actually generate and upload the PDF to S3 here.
+            // For now, we record the key that will eventually hold the PDF.
+            await docClient.send(new PutCommand({
+                TableName: DATA_TABLE,
+                Item: {
+                    PK: userId,
+                    SK: `JOB#${jobId}#FILE#${Date.now()}`,
+                    name: fileName,
+                    key: key,
+                    tag: 'Generated',
+                    timestamp: new Date().toISOString()
+                }
+            }));
+            await logJobHistory(jobId, "FILE_CREATED", `Generated PDF invoice: ${fileName}`);
+            return response(201, { message: "PDF generated" });
+        }
+        if (path.endsWith("/files") && method === "POST") {
+            const fileItem = {
+                PK: userId,
+                SK: `JOB#${jobId}#FILE#${Date.now()}`,
+                name: body.name,
+                key: body.key,
+                tag: body.tag,
+                timestamp: new Date().toISOString()
+            };
+            await docClient.send(new PutCommand({ TableName: DATA_TABLE, Item: fileItem }));
+            await logJobHistory(jobId, "FILE_UPLOADED", `Uploaded file: ${body.name} (${body.tag})`);
+            return response(201, { message: "File recorded" });
+        }
         if (path.match(/\/jobs\/.*\/items\/.*$/) && method === "DELETE") {
             const itemId = path.split("/").pop();
             const existingItem = await docClient.send(new GetCommand({
@@ -479,20 +601,32 @@ exports.handler = async (event) => {
             await logJobHistory(jobId, "VISIT_ADDED", `Scheduled site visit: ${body.startDateTime} to ${body.endDateTime}.`);
             return response(201, { id: visitId });
         }
-        if (path.match(/\/jobs\/.*\/visits\/.*$/) && method === "DELETE") {
-            const visitId = path.split("/").pop();
-            const existingVisit = await docClient.send(new GetCommand({
+        if (path.match(/\/jobs\/.*\/files\/.*$/) && method === "DELETE") {
+            const fileSkPart = path.split("/").pop();
+            const sk = `JOB#${jobId}#FILE#${fileSkPart}`;
+            
+            // 1. Get file details to get S3 key
+            const fileItem = await docClient.send(new GetCommand({
                 TableName: DATA_TABLE,
-                Key: { PK: userId, SK: `JOB#${jobId}#VISIT#${visitId}` }
+                Key: { PK: userId, SK: sk }
             }));
-            const visitNotes = existingVisit.Item ? existingVisit.Item.notes : 'Site Visit';
-
+            
+            if (fileItem.Item && fileItem.Item.key) {
+                // 2. Delete from S3
+                await s3Client.send(new DeleteObjectCommand({
+                    Bucket: FILES_BUCKET,
+                    Key: fileItem.Item.key
+                }));
+            }
+            
+            // 3. Delete from DynamoDB
             await docClient.send(new DeleteCommand({
                 TableName: DATA_TABLE,
-                Key: { PK: userId, SK: `JOB#${jobId}#VISIT#${visitId}` }
+                Key: { PK: userId, SK: sk }
             }));
-            await logJobHistory(jobId, "VISIT_DELETED", `Deleted site visit: ${visitNotes}`);
-            return response(200, { message: "Visit deleted" });
+            
+            await logJobHistory(jobId, "FILE_DELETED", `Deleted file: ${fileItem.Item ? fileItem.Item.name : 'Unknown'}`);
+            return response(200, { message: "File deleted" });
         }
     }
 
@@ -502,7 +636,7 @@ exports.handler = async (event) => {
       if (body.history) {
         messages.push({ role: "user", content: [{ text: body.message }] });
       }
-      let system = [{text:"You are a handyman project management helper. Use 'add_invoice_line_item' tool to add costs to a job estimate."}];
+      let system = [{text:"You are a handyman project management helper. Use 'add_invoice_line_item' tool to add costs to a job estimate, and 'log_actual_expense' to log real expenses incurred against a job."}];
       if(body.jobId){
         system.push({text:"You are currently in the context of job ID: "+body.jobId+". Always pass this jobId to tool calls."});
       }

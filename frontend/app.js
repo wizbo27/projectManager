@@ -256,6 +256,7 @@ document.getElementById('importContact').onchange = (e) => {
 };
 
 let isEditingItems = false;
+let isEditingExpenses = false;
 
 function toggleItemsEdit() {
     isEditingItems = !isEditingItems;
@@ -263,6 +264,90 @@ function toggleItemsEdit() {
     btn.innerHTML = isEditingItems ? '<i class="fas fa-save me-1"></i> Save Items' : '<i class="fas fa-edit me-1"></i> Edit Items';
     btn.className = isEditingItems ? 'btn btn-sm btn-success' : 'btn btn-sm btn-outline-secondary';
     renderLineItems();
+}
+
+function toggleExpensesEdit() {
+    isEditingExpenses = !isEditingExpenses;
+    const btn = document.getElementById('toggleEditExpenses');
+    btn.innerHTML = isEditingExpenses ? '<i class="fas fa-save me-1"></i> Save Expenses' : '<i class="fas fa-edit me-1"></i> Edit Expenses';
+    btn.className = isEditingExpenses ? 'btn btn-sm btn-success' : 'btn btn-sm btn-outline-secondary';
+    renderExpenses(allJobs.find(j => j.id === activeJobId));
+}
+
+function renderExpenses(job) {
+    const tbody = document.getElementById('jobExpenses');
+    const expenses = job.expenses || [];
+    
+    if (isEditingExpenses) {
+        tbody.innerHTML = expenses.map((e, idx) => `
+            <tr>
+                <td><input type="text" class="form-control form-control-sm edit-exp-desc" value="${e.description}"></td>
+                <td><input type="number" class="form-control form-control-sm edit-exp-qty" value="${e.quantity}"></td>
+                <td><input type="number" class="form-control form-control-sm edit-exp-cost" value="${e.cost}"></td>
+                <td>${new Date(e.timestamp).toLocaleDateString()}</td>
+                <td><button class="btn btn-sm btn-outline-danger" onclick="deleteExpenseItem(${idx})"><i class="fas fa-trash"></i></button></td>
+            </tr>
+        `).join('') + `
+            <tr>
+                <td colspan="5" class="text-center py-2">
+                    <button class="btn btn-sm btn-outline-primary" onclick="addNewExpenseRow()">
+                        <i class="fas fa-plus me-1"></i> Add Expense
+                    </button>
+                </td>
+            </tr>`;
+    } else {
+        tbody.innerHTML = expenses.length 
+            ? expenses.map(e => `<tr><td>${e.description}</td><td>${e.quantity}</td><td>$${e.cost}</td><td>${new Date(e.timestamp).toLocaleDateString()}</td></tr>`).join('')
+            : '<tr><td colspan="4" class="text-center text-muted">No expenses logged.</td></tr>';
+    }
+}
+
+function deleteExpenseItem(idx) {
+    const job = allJobs.find(j => j.id === activeJobId);
+    job.expenses.splice(idx, 1);
+    renderExpenses(job);
+}
+
+function addNewExpenseRow() {
+    syncExpensesState();
+    const job = allJobs.find(j => j.id === activeJobId);
+    job.expenses.push({ description: '', quantity: 1, cost: 0, timestamp: new Date().toISOString() });
+    renderExpenses(job);
+}
+
+function syncExpensesState() {
+    const job = allJobs.find(j => j.id === activeJobId);
+    if (!job || !isEditingExpenses) return;
+    const rows = document.querySelectorAll('#jobExpenses tr');
+    job.expenses = Array.from(rows)
+        .filter(row => row.querySelector('.edit-exp-desc'))
+        .map(row => ({
+            ...job.expenses.find((_, i) => i === Array.from(rows).indexOf(row)),
+            description: row.querySelector('.edit-exp-desc').value,
+            quantity: parseFloat(row.querySelector('.edit-exp-qty').value) || 0,
+            cost: parseFloat(row.querySelector('.edit-exp-cost').value) || 0
+        }));
+}
+
+async function saveBulkExpenses() {
+    syncExpensesState();
+    const job = allJobs.find(j => j.id === activeJobId);
+    try {
+        await apiFetch(`/jobs/${activeJobId}/expenses/bulk`, { 
+            method: 'POST', 
+            body: JSON.stringify({ expenses: job.expenses }) 
+        });
+        isEditingExpenses = false;
+        document.getElementById('toggleEditExpenses').innerHTML = '<i class="fas fa-edit me-1"></i> Edit Expenses';
+        document.getElementById('toggleEditExpenses').className = 'btn btn-sm btn-outline-secondary';
+        document.getElementById('toggleEditExpenses').onclick = toggleExpensesEdit;
+        
+        await loadJobs();
+        viewJob(activeJobId);
+        showToast('Success', 'Expenses updated successfully');
+    } catch (err) {
+        showToast('Error', 'Failed to update expenses');
+    }
 }
 
 function renderLineItems() {
@@ -399,6 +484,7 @@ function viewJob(id) {
         <div class="d-flex justify-content-between align-items-end border-bottom pb-3 mb-4">
             <div><h1 class="fw-bold text-primary mb-1">${job.title}</h1><p class="text-muted mb-0">Customer: <strong>${job.customerName || 'None'}</strong></p></div>
             <div>
+                <button class="btn btn-outline-secondary btn-sm me-2" onclick="generateJobPdf('${id}')"><i class="fas fa-file-pdf me-1"></i> Generate PDF</button>
                 <button class="btn btn-outline-primary btn-sm me-2" onclick="editJob('${id}')">Edit</button>
                 <button class="btn btn-outline-success btn-sm me-2" onclick="showAddItemModal('${id}')">Add Item</button>
                 <button class="btn btn-primary btn-sm" onclick="chatWithJob('${id}')">Chat with Job</button>
@@ -406,7 +492,9 @@ function viewJob(id) {
         </div>`;
     
     renderLineItems();
+    renderExpenses(job);
     renderVisitsList(job);
+    renderFiles(job);
     
     const total = job.lines.reduce((sum, l) => sum + (l.cost * l.quantity), 0);
     const statuses = ['ESTIMATE', 'APPROVED', 'IN PROGRESS', 'INVOICED', 'PAID'];
@@ -429,6 +517,37 @@ function viewJob(id) {
         header?.setAttribute('aria-expanded', 'false');
     }
     loadJobHistory(id);
+}
+
+function renderExpenses(job) {
+    const tbody = document.getElementById('jobExpenses');
+    const expenses = job.expenses || [];
+    
+    if (isEditingExpenses) {
+        tbody.innerHTML = expenses.map((e, idx) => `
+            <tr>
+                <td><input type="text" class="form-control form-control-sm edit-exp-desc" value="${e.description}"></td>
+                <td><input type="number" class="form-control form-control-sm edit-exp-qty" value="${e.quantity}"></td>
+                <td><input type="number" class="form-control form-control-sm edit-exp-cost" value="${e.cost}"></td>
+                <td>${new Date(e.timestamp).toLocaleDateString()}</td>
+                <td><button class="btn btn-sm btn-outline-danger" onclick="deleteExpenseItem(${idx})"><i class="fas fa-trash"></i></button></td>
+            </tr>
+        `).join('') + `
+            <tr>
+                <td colspan="5" class="text-center py-2">
+                    <button class="btn btn-sm btn-outline-primary" onclick="addNewExpenseRow()">
+                        <i class="fas fa-plus me-1"></i> Add Expense
+                    </button>
+                </td>
+            </tr>`;
+        
+        document.getElementById('toggleEditExpenses').onclick = saveBulkExpenses;
+    } else {
+        tbody.innerHTML = expenses.length 
+            ? expenses.map(e => `<tr><td>${e.description}</td><td>${e.quantity}</td><td>$${e.cost}</td><td>${new Date(e.timestamp).toLocaleDateString()}</td></tr>`).join('')
+            : '<tr><td colspan="4" class="text-center text-muted">No expenses logged.</td></tr>';
+        document.getElementById('toggleEditExpenses').onclick = toggleExpensesEdit;
+    }
 }
 
 async function loadJobHistory(jobId) {
@@ -646,11 +765,11 @@ function getStatusColor(status) {
     return colors[status] || '#6c757d';
 }
 
-function showNewVisitModal() {
-    document.getElementById('visitStart').value = '';
-    document.getElementById('visitEnd').value = '';
-    document.getElementById('visitNotes').value = '';
-    new bootstrap.Modal(document.getElementById('newVisitModal')).show();
+function showNewExpenseModal() {
+    document.getElementById('expenseDesc').value = '';
+    document.getElementById('expenseQty').value = '';
+    document.getElementById('expenseCost').value = '';
+    new bootstrap.Modal(document.getElementById('newExpenseModal')).show();
 }
 
 async function createNewVisit() {
@@ -692,6 +811,64 @@ async function deleteVisit(visitId) {
     }
 }
 
+function showNewVisitModal() {
+    document.getElementById('visitStart').value = '';
+    document.getElementById('visitEnd').value = '';
+    document.getElementById('visitNotes').value = '';
+    new bootstrap.Modal(document.getElementById('newVisitModal')).show();
+}
+
+async function generateJobPdf(id) {
+    showToast('PDF', 'Generating PDF...');
+    try {
+        await apiFetch(`/jobs/${id}/pdf`, { method: 'POST' });
+        showToast('Success', 'PDF generated successfully');
+        loadJobs().then(() => viewJob(id));
+    } catch (err) {
+        showToast('Error', 'Failed to generate PDF');
+    }
+}
+
+async function uploadJobFile() {
+    const fileInput = document.getElementById('jobFileUpload');
+    const fileTag = document.getElementById('fileTag').value;
+    if (!fileInput.files.length) return alert('Select a file first');
+    
+    const file = fileInput.files[0];
+    showToast('Upload', 'Preparing upload...');
+    
+    try {
+        // 1. Get presigned upload URL
+        const { uploadUrl, key } = await apiFetch(`/jobs/${activeJobId}/files/upload-url?fileName=${encodeURIComponent(file.name)}&fileType=${encodeURIComponent(file.type)}`);
+        
+        showToast('Upload', 'Uploading to S3...');
+        
+        // 2. Direct upload to S3
+        const s3Response = await fetch(uploadUrl, {
+            method: 'PUT',
+            body: file,
+            headers: { 'Content-Type': file.type }
+        });
+        
+        if (!s3Response.ok) throw new Error('S3 Upload Failed');
+
+        showToast('Upload', 'Recording file info...');
+
+        // 3. Record in backend
+        await apiFetch(`/jobs/${activeJobId}/files`, { 
+            method: 'POST', 
+            body: JSON.stringify({ name: file.name, tag: fileTag, key: key }) 
+        });
+
+        showToast('Success', 'File uploaded successfully');
+        fileInput.value = '';
+        loadJobs().then(() => viewJob(activeJobId));
+    } catch (err) {
+        console.error('Upload error:', err);
+        showToast('Error', 'Failed to upload: ' + err.message);
+    }
+}
+
 function renderVisitsList(job) {
     const visitList = document.getElementById('visitList');
     if (!visitList) return;
@@ -718,4 +895,41 @@ function renderVisitsList(job) {
             </div>
         `;
     }).join('');
+}
+
+function renderFiles(job) {
+    const list = document.getElementById('jobFilesList');
+    const files = job.files || [];
+    list.innerHTML = files.length 
+        ? files.map(f => {
+            const fileSkPart = f.SK.split('#').pop();
+            return `
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+                <div>
+                    <span class="fw-bold small d-block mb-1">${f.name}</span>
+                    <span class="badge bg-light text-dark border small">${f.tag || 'Other'}</span>
+                    <small class="text-muted ms-2">${new Date(f.timestamp).toLocaleDateString()}</small>
+                </div>
+                <div class="d-flex gap-2">
+                    <a href="${f.url}" target="_blank" class="btn btn-sm btn-outline-primary" title="Download">
+                        <i class="fas fa-download"></i>
+                    </a>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteJobFile('${job.id}', '${fileSkPart}')" title="Delete">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </div>`;
+        }).join('')
+        : '<div class="text-center py-4 text-muted small">No files.</div>';
+}
+
+async function deleteJobFile(jobId, fileSkPart) {
+    if (!confirm('Are you sure you want to delete this file?')) return;
+    try {
+        await apiFetch(`/jobs/${jobId}/files/${fileSkPart}`, { method: 'DELETE' });
+        showToast('Success', 'File deleted');
+        loadJobs().then(() => viewJob(jobId));
+    } catch (err) {
+        showToast('Error', 'Failed to delete file');
+    }
 }
